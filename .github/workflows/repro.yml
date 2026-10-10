@@ -1,0 +1,49 @@
+name: repro-startup-crash
+
+on:
+  push:
+    branches: [debug/startup-crash]
+
+jobs:
+  repro:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [fresh, upgrade]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install v0.1.0 first (upgrade scenario)
+        if: matrix.scenario == 'upgrade'
+        shell: pwsh
+        run: |
+          gh release download v0.1.0 --repo tkdals2317/PokeTokenBar-Windows --pattern '*-setup.exe' --dir old
+          Start-Process (Get-ChildItem old\*.exe).FullName -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\PokeTokenBar" -Filter *.exe | Where-Object Name -notlike 'uninstall*' | Select-Object -First 1
+          "old exe: $($exe.FullName)"
+          Start-Process $exe.FullName
+          Start-Sleep 30
+          "v0.1.0 alive after 30s:"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
+          Get-ChildItem "$env:APPDATA\com.tkdals2317.poketokenbar" -ErrorAction SilentlyContinue
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Run install.ps1 (installs latest)
+        shell: pwsh
+        run: ./install.ps1
+      - name: Check the app survives
+        shell: pwsh
+        run: |
+          Start-Sleep 30
+          "alive after 30s:"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
+          "installed files:"; Get-ChildItem "$env:LOCALAPPDATA\PokeTokenBar"
+          "app data:"; Get-ChildItem "$env:APPDATA\com.tkdals2317.poketokenbar" -ErrorAction SilentlyContinue
+          Get-ChildItem "$env:APPDATA\com.tkdals2317.poketokenbar" -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { "--- $($_.Name)"; Get-Content $_.FullName -TotalCount 40 }
+          "crash events:"
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001,1026} -MaxEvents 20 -ErrorAction SilentlyContinue | Format-List TimeCreated, Id, Message
+      - name: Launch a second time (single instance)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\PokeTokenBar" -Filter *.exe | Where-Object Name -notlike 'uninstall*' | Select-Object -First 1
+          Start-Process $exe.FullName
+          Start-Sleep 15
+          "after second launch:"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
