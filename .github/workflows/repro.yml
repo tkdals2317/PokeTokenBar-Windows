@@ -7,43 +7,54 @@ on:
 jobs:
   repro:
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario: [fresh, upgrade]
     steps:
       - uses: actions/checkout@v4
-      - name: Install v0.1.0 first (upgrade scenario)
-        if: matrix.scenario == 'upgrade'
-        shell: pwsh
-        run: |
-          gh release download v0.1.0 --repo tkdals2317/PokeTokenBar-Windows --pattern '*-setup.exe' --dir old
-          Start-Process (Get-ChildItem old\*.exe).FullName -ArgumentList '/S' -Wait
-          $exe = Get-ChildItem "$env:LOCALAPPDATA\PokeTokenBar" -Filter *.exe | Where-Object Name -notlike 'uninstall*' | Select-Object -First 1
-          "old exe: $($exe.FullName)"
-          Start-Process $exe.FullName
-          Start-Sleep 30
-          "v0.1.0 alive after 30s:"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
-          Get-ChildItem "$env:APPDATA\com.tkdals2317.poketokenbar" -ErrorAction SilentlyContinue
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Build NSIS installer from this branch
+        run: npx tauri build --bundles nsis
         env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Run install.ps1 (installs latest)
-        shell: pwsh
-        run: ./install.ps1
-      - name: Check the app survives
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Fake real-user data (Claude logs, credentials, Codex limits)
         shell: pwsh
         run: |
-          Start-Sleep 30
-          "alive after 30s:"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
-          "installed files:"; Get-ChildItem "$env:LOCALAPPDATA\PokeTokenBar"
-          "app data:"; Get-ChildItem "$env:APPDATA\com.tkdals2317.poketokenbar" -ErrorAction SilentlyContinue
-          Get-ChildItem "$env:APPDATA\com.tkdals2317.poketokenbar" -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { "--- $($_.Name)"; Get-Content $_.FullName -TotalCount 40 }
-          "crash events:"
-          Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001,1026} -MaxEvents 20 -ErrorAction SilentlyContinue | Format-List TimeCreated, Id, Message
-      - name: Launch a second time (single instance)
+          $p = "$HOME\.claude\projects\demo"; New-Item -ItemType Directory -Force $p | Out-Null
+          $ts = (Get-Date).ToString("o")
+          '{"type":"assistant","requestId":"r0","timestamp":"' + $ts + '","message":{"id":"m0","model":"claude-x","usage":{"input_tokens":10,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":1000}}}' | Set-Content "$p\s.jsonl"
+          $exp = [DateTimeOffset]::UtcNow.AddDays(1).ToUnixTimeMilliseconds()
+          '{"claudeAiOauth":{"accessToken":"fake","expiresAt":' + $exp + '}}' | Set-Content "$HOME\.claude\.credentials.json"
+          $c = "$HOME\.codex\sessions\2026\10\10"; New-Item -ItemType Directory -Force $c | Out-Null
+          $reset = [DateTimeOffset]::UtcNow.AddHours(2).ToUnixTimeSeconds()
+          '{"timestamp":"' + $ts + '","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":50,"output_tokens":5}},"rate_limits":{"primary":{"used_percent":91.0,"window_minutes":300,"resets_at":' + $reset + '},"secondary":null}}}' | Set-Content "$c\rollout-x.jsonl"
+      - name: Install, launch, then add 6M tokens to trigger a hatch
         shell: pwsh
         run: |
+          $setup = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/S' -Wait
           $exe = Get-ChildItem "$env:LOCALAPPDATA\PokeTokenBar" -Filter *.exe | Where-Object Name -notlike 'uninstall*' | Select-Object -First 1
           Start-Process $exe.FullName
-          Start-Sleep 15
-          "after second launch:"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
+          Start-Sleep 20
+          "alive after 20s (baseline seeded):"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, StartTime
+          $ts = (Get-Date).ToString("o")
+          '{"type":"assistant","requestId":"r1","timestamp":"' + $ts + '","message":{"id":"m1","model":"claude-x","usage":{"input_tokens":10,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":6000000}}}' | Add-Content "$HOME\.claude\projects\demo\s.jsonl"
+          Start-Sleep 90
+      - name: Evidence
+        if: always()
+        shell: pwsh
+        run: |
+          "alive after hatch window:"; Get-Process -Name poketokenbar -ErrorAction SilentlyContinue | Format-Table Id, StartTime
+          $d = "$env:APPDATA\com.tkdals2317.poketokenbar"
+          Get-ChildItem $d -ErrorAction SilentlyContinue
+          "--- crash.log"; Get-Content "$d\crash.log" -ErrorAction SilentlyContinue
+          "--- companion.json"; Get-Content "$d\companion.json" -TotalCount 25 -ErrorAction SilentlyContinue
+          "--- app errors"
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001,1026} -MaxEvents 10 -ErrorAction SilentlyContinue |
+            Where-Object Message -like '*oketoken*' | Format-List TimeCreated, Id, Message

@@ -267,6 +267,26 @@ fn scheduler(app: AppHandle) {
     }
 }
 
+/// Release builds abort on panic without a message (panic = "abort", no console on Windows),
+/// so the reason is appended to `crash.log` in the app data folder first.
+fn install_crash_log(path: PathBuf) {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+        let line = format!(
+            "{} v{} thread '{thread}': {info}\n{}\n\n",
+            chrono::Local::now().to_rfc3339(),
+            env!("CARGO_PKG_VERSION"),
+            std::backtrace::Backtrace::force_capture()
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = f.write_all(line.as_bytes());
+        }
+        default(info);
+    }));
+}
+
 // ---- windows ----
 
 fn apply_pet_visibility(app: &AppHandle, visible: bool) {
@@ -330,6 +350,7 @@ pub fn run() {
 
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+            install_crash_log(dir.join("crash.log"));
             let settings_path = dir.join("settings.json");
             let settings = load_json::<Settings>(&settings_path).sanitized();
             apply_pet_visibility(app.handle(), settings.pet_enabled);
