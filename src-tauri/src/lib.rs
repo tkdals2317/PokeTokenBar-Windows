@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, State, WindowEvent,
+    AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
@@ -271,14 +271,34 @@ fn scheduler(app: AppHandle) {
 
 fn apply_pet_visibility(app: &AppHandle, visible: bool) {
     if let Some(w) = app.get_webview_window("pet") {
-        let _ = if visible { w.show() } else { w.hide() };
+        if visible {
+            reveal(&w, false);
+        } else {
+            let _ = w.hide();
+        }
+    }
+}
+
+/// A minimized window still reports `is_visible() == true` but sits off-screen, and with
+/// `skipTaskbar` there is no taskbar button to restore it (e.g. after Win+D). Treat it as hidden.
+fn on_screen(w: &WebviewWindow) -> bool {
+    w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false)
+}
+
+fn reveal(w: &WebviewWindow, focus: bool) {
+    if w.is_minimized().unwrap_or(false) {
+        let _ = w.unminimize();
+    }
+    let _ = w.show();
+    if focus {
+        let _ = w.set_focus();
     }
 }
 
 /// "main" is the usage popover, "pet" the floating Pokémon (its visibility is a setting).
 fn toggle(app: &AppHandle, label: &str) {
     let Some(w) = app.get_webview_window(label) else { return };
-    let visible = w.is_visible().unwrap_or(false);
+    let visible = on_screen(&w);
     if label == "pet" {
         let mut s = current_settings(app);
         s.pet_enabled = !visible;
@@ -288,8 +308,7 @@ fn toggle(app: &AppHandle, label: &str) {
     if visible {
         let _ = w.hide();
     } else {
-        let _ = w.show();
-        let _ = w.set_focus();
+        reveal(&w, true);
     }
 }
 
@@ -300,8 +319,7 @@ pub fn run() {
         // brings the running copy's window forward instead of adding another pet and tray icon.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
+                reveal(&w, true);
             }
         }))
         .plugin(tauri_plugin_window_state::Builder::new().build())
