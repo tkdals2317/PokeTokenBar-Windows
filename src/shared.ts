@@ -1,9 +1,8 @@
 // Backend contract (mirrors src-tauri/src/model.rs and the area settings blocks) and app-wide hooks.
 // Owner: foundation, except the `#region <area>` blocks, which belong to that area.
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { LogicalSize, PhysicalPosition, Window } from "@tauri-apps/api/window";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { LegacyDict, legacyDict, nameLang } from "./i18n";
@@ -240,28 +239,8 @@ export const I18n = createContext<{ lang: Lang; t: LegacyDict }>({ lang: "en", t
 export const useI18n = () => useContext(I18n);
 
 // #region pet-settings-misc
-export const PET_SIZE = { min: 48, max: 384, step: 8 };
-
-async function petWindow() {
-  return Window.getByLabel("pet");
-}
-
-export async function petSize() {
-  const w = await petWindow();
-  if (!w) return 120;
-  const [size, scale] = await Promise.all([w.innerSize(), w.scaleFactor()]);
-  return Math.round(size.width / scale);
-}
-
-/** Resizes the pet window, keeping its bottom-center (where the sprite stands) in place. */
-export async function resizePet(px: number) {
-  const w = await petWindow();
-  if (!w) return;
-  const [pos, size, scale] = await Promise.all([w.outerPosition(), w.outerSize(), w.scaleFactor()]);
-  const next = Math.round(px * scale);
-  await w.setSize(new LogicalSize(px, px));
-  await w.setPosition(new PhysicalPosition(pos.x + Math.round((size.width - next) / 2), pos.y + size.height - next));
-}
+/** Update checks at launch and on popover open wait this long after the last successful one (UpdateChecker.swift). */
+export const UPDATE_CHECK_COOLDOWN_SECS = 1800;
 // #endregion
 
 // ---- updater ----
@@ -271,17 +250,27 @@ export type UpdateState =
   | { status: "available"; update: Update }
   | { status: "downloading"; update: Update; progress: number };
 
-/** In-app updater: checks GitHub Releases' latest.json once on open, installs on request. */
+/** In-app updater: checks GitHub Releases' latest.json at launch and on popover open (30 min cooldown
+ *  after a success only), and manually with no cooldown. Installs on request. */
 export function useUpdater() {
   const [state, setState] = useState<UpdateState>({ status: "idle" });
+  const lastSuccess = useRef<number | null>(null);
+  const inFlight = useRef(false);
 
-  async function checkNow() {
-    setState({ status: "checking" });
+  async function checkNow(minIntervalSecs = 0) {
+    if (inFlight.current) return;
+    if (lastSuccess.current != null && Date.now() - lastSuccess.current < minIntervalSecs * 1000) return;
+    const manual = minIntervalSecs === 0;
+    inFlight.current = true;
+    if (manual) setState({ status: "checking" });
     try {
       const update = await check();
-      setState(update ? { status: "available", update } : { status: "none" });
+      lastSuccess.current = Date.now();
+      setState((s) => (s.status === "downloading" ? s : update ? { status: "available", update } : { status: "none" }));
     } catch {
-      setState({ status: "error" });
+      if (manual) setState({ status: "error" }); // a background failure keeps what was known
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -307,8 +296,9 @@ export function useUpdater() {
   }
 
   useEffect(() => {
-    checkNow();
+    checkNow(UPDATE_CHECK_COOLDOWN_SECS);
   }, []);
+  usePopoverOpened(useCallback(() => void checkNow(UPDATE_CHECK_COOLDOWN_SECS), []));
   return { state, checkNow, install };
 }
 export type Updater = ReturnType<typeof useUpdater>;

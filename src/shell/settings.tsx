@@ -54,10 +54,13 @@ export function SettingsScreen(props: Omit<SettingsRowProps, "set"> & { onClose:
               <section key={g}>
                 <h3>{t[g]}</h3>
                 <div className="settings-card">
-                  {rows.map(({ id, Row }) => (
+                  {rows.filter((r) => !r.footer).map(({ id, Row }) => (
                     <Row key={id} {...rowProps} />
                   ))}
                 </div>
+                {rows.filter((r) => r.footer).map(({ id, Row }) => (
+                  <Row key={id} {...rowProps} />
+                ))}
               </section>
             ),
         )}

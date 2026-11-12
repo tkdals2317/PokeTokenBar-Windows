@@ -48,10 +48,14 @@ fn invoke(invoke: tauri::ipc::Invoke) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    use tauri::Manager;
     tauri::Builder::default()
         // Must be first: a second launch exits and opens the running copy's popover instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::on_second_instance(app)))
+        // poketokenbar:// agent URLs arrive here as a second launch; they never open the popover.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !pet::handle_args(app, &args) {
+                shell::on_second_instance(app)
+            }
+        }))
         // The popover is anchored to the tray every time it opens, so only the pet keeps its place.
         .plugin(tauri_plugin_window_state::Builder::new().with_denylist(&[shell::popover::LABEL]).build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
@@ -65,7 +69,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let dir = app.path().app_data_dir()?;
+            let dir = pet::state_dir(app)?; // PTB_STATE_DIR override, else the app data folder
             std::fs::create_dir_all(&dir)?;
             shell::install_crash_log(dir.join("crash.log"));
             settings::setup(app, &dir);

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet-settings-misc",
+  "description": "Floating pet hover callout window (click-through, listens for its text)",
+  "windows": [
+    "pet-callout"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}
