@@ -122,7 +122,7 @@ pub fn on_limits(app: &AppHandle, limits: &[crate::limits::ProviderLimits]) {
     }
     let settings = crate::settings::current(app);
     let lang = settings.shell.language.clone();
-    let windows = rules::candy_windows(limits, &lang);
+    let windows = rules::from_limits(crate::limits::candy_windows(app));
     let grants = crate::companion::update(app, |s| rules::grant_candies(s, &windows, ready));
     let notes: Vec<(String, String)> = grants.iter().map(|(name, n)| (text::candy_title(&lang, *n), text::candy_body(&lang, name))).collect();
     notify_all(app, &settings, &notes);

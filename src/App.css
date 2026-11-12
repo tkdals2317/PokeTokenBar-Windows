@@ -17,7 +17,6 @@ h2 { margin: 4px 0; font-size: 20px; }
 .progress { margin-top: 8px; }
 .bar { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent); transition: width 0.4s; }
-.toast { background: var(--accent); color: #fff; border-radius: 10px; padding: 10px; text-align: center; font-weight: 600; }
 
 /* Floating pet window: fully transparent, sprite sits on the bottom edge. */
 :root.pet-window, :root.pet-window body { background: transparent; }

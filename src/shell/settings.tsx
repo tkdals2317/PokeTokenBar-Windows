@@ -8,19 +8,22 @@ import { Icon } from "../kit/components";
 import { useStrings } from "../kit/i18n";
 import { GROUPS, SettingsRow, SettingsRowProps } from "./settingsKit";
 import { shellStrings } from "./strings";
+import { petStrings } from "../areas/pet-settings-misc/strings";
 
 const modules = import.meta.glob<{ settingsRows?: SettingsRow[] }>("../areas/*/settings.tsx", { eager: true });
 const ROWS = Object.values(modules)
   .flatMap((m) => m.settingsRows ?? [])
   .sort((a, b) => a.order - b.order);
 
-const LINKS: [string, string][] = [
-  ["GitHub", "https://github.com/tkdals2317/PokeTokenBar-Windows"],
-  ["Website", "https://chattymin.github.io/PokeTokenBar/"],
-];
 
 export function SettingsScreen(props: Omit<SettingsRowProps, "set"> & { onClose: () => void }) {
   const t = useStrings(shellStrings);
+  const p = useStrings(petStrings);
+  const links: [string, string][] = [
+    ["GitHub", "https://github.com/tkdals2317/PokeTokenBar-Windows"],
+    [p.website, "https://chattymin.github.io/PokeTokenBar/"],
+    [`♥ ${p.sponsor}`, "https://github.com/sponsors/chattymin"],
+  ];
   const [version, setVersion] = useState("");
   useEffect(() => {
     getVersion().then(setVersion);
@@ -68,7 +71,7 @@ export function SettingsScreen(props: Omit<SettingsRowProps, "set"> & { onClose:
       <hr className="divider" />
       <footer className="settings-footer">
         <span>v{version}</span>
-        {LINKS.map(([label, url]) => (
+        {links.map(([label, url]) => (
           <span key={url}>
             {" · "}
             <button className="link" title={url} onClick={() => openUrl(url)}>

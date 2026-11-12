@@ -344,10 +344,6 @@ fn idle_secs(snap: &UsageSnapshot) -> Option<u64> {
     })
 }
 
-fn limit_warning(app: &AppHandle, crit: f64) -> bool {
-    crate::limits::current(app).iter().flat_map(|l| l.windows.iter()).any(|w| w.used_percent >= crit)
-}
-
 /// Called by the shell after every usage refresh: credit growth, hatch, notify, emit.
 pub fn on_usage(app: &AppHandle, snap: &UsageSnapshot) {
     let settings = crate::settings::current(app);
@@ -357,7 +353,7 @@ pub fn on_usage(app: &AppHandle, snap: &UsageSnapshot) {
     let has_current = has_usage_data && !today.is_empty();
     let tokens_today: u64 = today.values().sum();
     let tpm: f64 = snap.providers.iter().filter_map(|p| p.active_block.as_ref()).map(|b| b.tokens_per_minute).sum();
-    let warning = limit_warning(app, settings.limits.crit_threshold);
+    let warning = crate::limits::is_limit_warning(app);
     let mut rng = Rng::new();
     {
         let store = app.state::<SharedStore>();

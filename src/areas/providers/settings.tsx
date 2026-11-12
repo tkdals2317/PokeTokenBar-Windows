@@ -9,7 +9,6 @@ import { providerStrings } from "./strings";
 import "./providers.css";
 
 function TrackedProviders({ settings, save }: SettingsRowProps) {
-  const t = useStrings(providerStrings);
   const disabled = settings.disabled_providers;
   return (
     <>
@@ -22,9 +21,13 @@ function TrackedProviders({ settings, save }: SettingsRowProps) {
           />
         </SettingRow>
       ))}
-      <div className="providers-footnote">{t.trackedProvidersHint}</div>
     </>
   );
+}
+
+/** Below the Providers card, like the macOS group footer. */
+function TrackedProvidersHint() {
+  return <div className="providers-footnote below">{useStrings(providerStrings).trackedProvidersHint}</div>;
 }
 
 /** Latest value for effects that run on unmount. */
@@ -146,6 +149,7 @@ function ScanFolders(props: SettingsRowProps) {
 
 export const settingsRows: SettingsRow[] = [
   { id: "tracked-providers", group: "providers", order: 160, Row: TrackedProviders },
+  { id: "tracked-providers-hint", group: "providers", order: 161, Row: TrackedProvidersHint, footer: true },
   { id: "additional-claude-accounts", group: "advanced", order: 410, Row: AdditionalAccounts },
   { id: "custom-scan-roots", group: "advanced", order: 420, Row: ScanFolders },
 ];

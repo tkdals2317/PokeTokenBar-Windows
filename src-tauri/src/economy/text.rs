@@ -11,28 +11,6 @@ fn tf(lang: &str, v: [&str; 8], args: &[&str]) -> String {
     args.iter().fold(t(lang, v).to_string(), |s, a| s.replacen("{}", a, 1))
 }
 
-pub fn claude_five_hour(lang: &str) -> &'static str {
-    t(lang, ["Claude 5시간 세션", "Claude 5-hour session", "Claude 5時間セッション", "Sesión de 5 horas de Claude", "Session de 5 h de Claude", "Sessão de 5 horas do Claude", "Claude-5-Stunden-Sitzung", "Claude: 5-часовая сессия"])
-}
-
-pub fn claude_weekly(lang: &str) -> &'static str {
-    t(lang, ["Claude 주간", "Claude weekly", "Claude 週間", "Semanal de Claude", "Claude hebdo", "Semanal do Claude", "Claude – wöchentlich", "Claude: неделя"])
-}
-
-/// `codexWindow(mins)`.
-pub fn codex_window(lang: &str, mins: Option<u64>) -> String {
-    match mins {
-        Some(300) => t(lang, ["5시간 세션", "5-hour session", "5時間セッション", "Sesión de 5 horas", "Session de 5 h", "Sessão de 5 horas", "5-Stunden-Sitzung", "5-часовая сессия"]).into(),
-        Some(10_080) => t(lang, ["주간", "Weekly", "週間", "Semanal", "Hebdo", "Semanal", "Wöchentlich", "Неделя"]).into(),
-        Some(m) if m >= 60 && m % 60 == 0 => {
-            let h = (m / 60).to_string();
-            tf(lang, ["{}시간", "{}h", "{}時間", "{}h", "{} h", "{}h", "{} Std.", "{} ч"], &[&h])
-        }
-        Some(m) => tf(lang, ["{}분", "{}m", "{}分", "{}m", "{} min", "{} min", "{} Min.", "{} мин"], &[&m.to_string()]),
-        None => t(lang, ["한도", "Limit", "上限", "Límite", "Limite", "Limite", "Limit", "Лимит"]).into(),
-    }
-}
-
 fn rare_candy(lang: &str) -> &'static str {
     t(lang, ["이상한 사탕", "Rare Candy", "ふしぎなアメ", "Caramelo Raro", "Super Bonbon", "Doce Raro", "Sonderbonbon", "Редкая конфета"])
 }
@@ -123,7 +101,5 @@ mod tests {
         assert_eq!(badge_notification("ko", "region.johto").0, "🏅 성도 도감 완성!");
         assert_eq!(badge_notification("en", "regionShiny.unova").0, "✨ Shiny Unova Dex complete!");
         assert_eq!(badge_notification("en", "nationalShiny").1, "You've caught a shiny of every Pokémon!");
-        assert_eq!(codex_window("en", Some(120)), "2h");
-        assert_eq!(codex_window("de", Some(90)), "90 Min.");
     }
 }

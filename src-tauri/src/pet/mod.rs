@@ -810,6 +810,8 @@ fn pet_click(app: AppHandle, pray: bool) -> u64 {
         }
         (count, refresh)
     };
+    // The hatch notification and dex record read the prayers from companion state.
+    crate::companion::update(&app, |s| s.egg_prayers = Some(crate::companion::state::Prayers { count: count as u32 }));
     if refresh {
         crate::shell::refresh_now(app.clone());
     }

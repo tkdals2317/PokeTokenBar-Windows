@@ -132,6 +132,9 @@ pub struct LimitAlert {
     pub body: String,
     pub critical: bool,
     pub utilization: f64,
+    /// Localized window name and account title, for the floating-pet bubble layout.
+    pub window: String,
+    pub account: Option<String>,
 }
 
 /// A window eligible for Rare Candy (`UsageStore.candyEligibleWindows`), for economy.
@@ -710,7 +713,7 @@ fn evaluate(
             body = format!("{body} · {a}");
         }
         let title = tr(if tier == 2 { &strings::NOTIF_CRITICAL } else { &strings::NOTIF_WARNING }, lang);
-        alerts.push(LimitAlert { key: key.clone(), title: title.into(), body, critical: tier == 2, utilization: *u });
+        alerts.push(LimitAlert { key: key.clone(), title: title.into(), body, critical: tier == 2, utilization: *u, window: name.clone(), account: account.clone() });
     }
     alerts
 }
@@ -764,6 +767,10 @@ fn run(app: &AppHandle, manual: bool) -> Vec<ProviderLimits> {
         if let Some(b) = bubble_pick(&alerts) {
             sh.bubble = Some((b.clone(), Instant::now()));
             let _ = app.emit(EV_ALERT, b);
+            crate::pet::show_limit_bubble(
+                app,
+                crate::pet::LimitBubble { critical: b.critical, window: b.window.clone(), utilization: b.utilization, account: b.account.clone() },
+            );
         }
     }
     sh.limits = all.clone();
@@ -1203,7 +1210,7 @@ mod tests {
 
     #[test]
     fn bubble_prefers_critical_then_highest() {
-        let a = |c: bool, u: f64| LimitAlert { key: format!("{u}"), title: String::new(), body: String::new(), critical: c, utilization: u };
+        let a = |c: bool, u: f64| LimitAlert { key: format!("{u}"), title: String::new(), body: String::new(), critical: c, utilization: u, window: String::new(), account: None };
         let alerts = [a(false, 94.0), a(true, 95.0), a(true, 99.0)];
         assert_eq!(bubble_pick(&alerts).unwrap().utilization, 99.0);
         assert!(bubble_pick(&[]).is_none());

@@ -1,7 +1,6 @@
 //! Pure economy rules (shop-bag-dex.md §3): items, prices, wallet, eggs, Rare Candy and Mint use,
 //! free candy grants from 100% limits, regional Pokédex progress and badges. No Tauri here.
 
-use super::text;
 use crate::companion::{Rarity, State, clamp_difficulty};
 use crate::limits::ProviderLimits;
 use fastrand::Rng;
@@ -204,54 +203,18 @@ pub struct CandyWindow {
     pub epoch: Option<String>,
 }
 
-/// "5h" → 300, "7d" → 10080, "90m" → 90.
-fn window_minutes(key: &str) -> Option<u64> {
-    let (n, unit) = key.split_at(key.len().checked_sub(1)?);
-    let n: u64 = n.parse().ok()?;
-    Some(match unit {
-        "m" => n,
-        "h" => n * 60,
-        "d" => n * 1440,
-        _ => return None,
-    })
-}
-
-/// Eligible windows: Claude 5h / 7d (not Opus / Sonnet), every Codex slot.
-pub fn candy_windows(limits: &[ProviderLimits], lang: &str) -> Vec<CandyWindow> {
-    let mut out = vec![];
-    for p in limits {
-        match p.provider {
-            "claude" | "claude_code" => {
-                for w in &p.windows {
-                    let (key, name, kind) = match w.key.as_str() {
-                        "5h" => ("claude.fiveHour", text::claude_five_hour(lang), WindowKind::Session),
-                        "7d" => ("claude.sevenDay", text::claude_weekly(lang), WindowKind::Weekly),
-                        _ => continue,
-                    };
-                    out.push(CandyWindow { key: key.into(), name: name.into(), kind, utilization: w.used_percent, epoch: w.resets_at.clone() });
-                }
-            }
-            "codex" => {
-                for (w, slot) in p.windows.iter().zip(["primary", "secondary"]) {
-                    // ponytail: the limits parser reports an expired snapshot as 0% with no reset time;
-                    // that is not a real sub-100% sample, so it must not rearm (#434). Drop when limits keeps raw values.
-                    if w.resets_at.is_none() && w.used_percent == 0.0 {
-                        continue;
-                    }
-                    let mins = window_minutes(&w.key);
-                    out.push(CandyWindow {
-                        key: format!("codex.codex.{slot}"),
-                        name: format!("Codex {}", text::codex_window(lang, mins)),
-                        kind: if mins.is_some_and(|m| m > 1440) { WindowKind::Weekly } else { WindowKind::Session },
-                        utilization: w.used_percent,
-                        epoch: None,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-    out
+/// The limits area's eligible windows (claude[.<id>].fiveHour/sevenDay, codex.<bucket>.<slot>,
+/// antigravity.<g>.<bucket>) in this module's shape.
+pub fn from_limits(ws: Vec<crate::limits::CandyWindow>) -> Vec<CandyWindow> {
+    ws.into_iter()
+        .map(|w| CandyWindow {
+            kind: if w.kind == "weekly" { WindowKind::Weekly } else { WindowKind::Session },
+            key: w.key,
+            name: w.name,
+            utilization: w.utilization,
+            epoch: w.epoch,
+        })
+        .collect()
 }
 
 /// Any provider limit loaded: until then nothing is seeded or granted.
@@ -425,7 +388,6 @@ mod tests {
     use super::*;
     use crate::companion::form;
     use crate::companion::state::{DexEntry, EvoNode, Line, Mon, Names};
-    use crate::limits::Window;
 
     fn mon(rarity: Rarity, forms: usize, stage: usize, used: u64) -> Mon {
         let ids: Vec<u32> = (1..=forms as u32).collect();
@@ -588,23 +550,10 @@ mod tests {
 
     #[test]
     fn windows_from_limits() {
-        let w = |k: &str, u: f64, r: Option<&str>| Window { key: k.into(), used_percent: u, resets_at: r.map(String::from) };
-        let limits = [
-            ProviderLimits { provider: "claude", windows: vec![w("5h", 100.0, Some("t1")), w("7d", 50.0, Some("t2")), w("7d-opus", 100.0, None)], error: None },
-            ProviderLimits { provider: "codex", windows: vec![w("5h", 100.0, Some("t")), w("7d", 0.0, None)], error: None },
-        ];
-        let ws = candy_windows(&limits, "en");
-        let keys: Vec<_> = ws.iter().map(|w| (w.key.as_str(), w.name.as_str(), w.kind, w.epoch.is_some())).collect();
-        assert_eq!(
-            keys,
-            [
-                ("claude.fiveHour", "Claude 5-hour session", WindowKind::Session, true),
-                ("claude.sevenDay", "Claude weekly", WindowKind::Weekly, true),
-                ("codex.codex.primary", "Codex 5-hour session", WindowKind::Session, false),
-            ]
-        );
-        assert!(limits_ready(&limits) && !limits_ready(&[]));
-        assert_eq!(window_minutes("7d"), Some(10080));
+        let lw = |kind: &'static str| crate::limits::CandyWindow { key: "k".into(), name: "n".into(), kind, utilization: 1.0, epoch: None };
+        let ws = from_limits(vec![lw("session"), lw("weekly")]);
+        assert_eq!(ws.iter().map(|w| w.kind).collect::<Vec<_>>(), [WindowKind::Session, WindowKind::Weekly]);
+        assert!(!limits_ready(&[]));
     }
 
     fn entry(chain: Vec<u32>, shiny: bool) -> DexEntry {

@@ -191,7 +191,7 @@ export default function HomeTab(props: TabProps) {
       </div>
       <hr className="divider" />
       {/* Limits owns the status banner, its section and the trailing divider, for the selected provider. */}
-      <LimitsSection {...props} />
+      <LimitsSection {...props} providerId={selectedId ?? undefined} />
       {recap && <RecapScreen ledger={ledger} companion={props.companion} firstDow={WEEK.firstDow} onBack={() => setRecap(false)} />}
     </div>
   );

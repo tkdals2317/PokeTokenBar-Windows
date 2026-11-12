@@ -15,8 +15,6 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 
 pub const TRAY_ID: &str = "main";
-/// The limits API is never polled more often than this, whatever the refresh interval.
-const MIN_LIMITS_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const SCHEDULER_TICK: Duration = Duration::from_secs(5);
 
 pub fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -92,7 +90,7 @@ fn scheduler(app: AppHandle) {
             continue; // manual only
         }
         let interval = Duration::from_secs(minutes as u64 * 60);
-        if last_limits.elapsed() >= interval.max(MIN_LIMITS_INTERVAL) {
+        if last_limits.elapsed() >= interval /* 429 backoff lives in limits */ {
             refresh_limits(&app);
             last_limits = Instant::now();
         }

@@ -248,7 +248,7 @@ fn parse_details(id: u32, p: &Value, gender_rate: i32) -> Details {
 
 // ---- localized resource names (type, ability, move, pokemon-form) ----
 
-pub const NAME_KINDS: [&str; 4] = ["type", "ability", "move", "pokemon-form"];
+pub const NAME_KINDS: [&str; 5] = ["type", "ability", "move", "pokemon-form", "pokemon-species"];
 
 pub fn valid_resource(kind: &str, name: &str) -> bool {
     NAME_KINDS.contains(&kind) && !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')

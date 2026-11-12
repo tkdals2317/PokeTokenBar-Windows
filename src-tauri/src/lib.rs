@@ -57,7 +57,7 @@ pub fn run() {
             }
         }))
         // The popover is anchored to the tray every time it opens, so only the pet keeps its place.
-        .plugin(tauri_plugin_window_state::Builder::new().with_denylist(&[shell::popover::LABEL]).build())
+        .plugin(tauri_plugin_window_state::Builder::new().with_denylist(&[shell::popover::LABEL, pet::PET]).build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
