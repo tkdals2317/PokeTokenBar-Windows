@@ -215,7 +215,8 @@ fn newest_rollouts(root: &Path) -> Vec<PathBuf> {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for e in entries.flatten() {
             let p = e.path();
-            match e.metadata() {
+            // Fresh stat: Windows directory listings keep a stale mtime for files still open for writing.
+            match std::fs::metadata(&p) {
                 Ok(m) if m.is_dir() => walk(&p, out),
                 Ok(m) if p.extension().is_some_and(|x| x == "jsonl") => {
                     out.push((m.modified().unwrap_or(std::time::UNIX_EPOCH), p))

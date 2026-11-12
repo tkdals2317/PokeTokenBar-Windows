@@ -328,7 +328,10 @@ pub fn walk_files(root: &Path, f: &mut dyn FnMut(&Path, &fs::Metadata)) {
         if ft.is_dir() {
             walk_files(&path, f);
         } else if ft.is_file() {
-            if let Ok(meta) = e.metadata() {
+            // Not `e.metadata()`: on Windows that is the directory listing's copy, which keeps the old
+            // size and mtime while another process still has the file open for appending (a live
+            // Claude Code session), so new usage would not show until the session closed the file.
+            if let Ok(meta) = fs::metadata(&path) {
                 f(&path, &meta);
             }
         }
