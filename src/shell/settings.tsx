@@ -40,11 +40,11 @@ export function SettingsScreen(props: Omit<SettingsRowProps, "set"> & { onClose:
 
   return (
     <div className="settings-screen">
-      <header className="settings-header">
+      <header className="settings-header" data-drag>
         <button className="back" onClick={props.onClose}>
           <Icon name="chevronLeft" size={12} /> {t.back}
         </button>
-        <strong>{t.settings}</strong>
+        <strong data-drag>{t.settings}</strong>
         <span className="back" aria-hidden style={{ visibility: "hidden" }}>
           <Icon name="chevronLeft" size={12} /> {t.back}
         </span>

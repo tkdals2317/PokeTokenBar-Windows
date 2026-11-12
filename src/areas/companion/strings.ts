@@ -95,7 +95,7 @@ export const companionStrings = defineStrings({
     difficultyGrowthHigh: "어려움",
     difficultyScaleHint: (low, high) => `낮추면 ${low}, 높이면 ${high}`,
     save: "저장",
-    companionNotificationsLabel: "Companion 이벤트 (부화·진화·졸업)",
+    companionNotificationsLabel: "포켓몬 이벤트 (부화·진화·졸업)",
   },
   ja: {
     finalForm: "最終進化",

@@ -21,6 +21,23 @@ const REOPEN_GUARD: Duration = Duration::from_millis(250);
 #[derive(Default)]
 pub struct PopoverState {
     hidden_at: Option<Instant>,
+    /// The user dragged the popover somewhere: keep it there (until the app quits) instead of
+    /// re-anchoring it to the tray icon on every open / Settings switch.
+    moved: bool,
+}
+
+/// The webview is about to start a window drag.
+pub fn mark_moved(app: &AppHandle) {
+    app.state::<Mutex<PopoverState>>().lock().unwrap().moved = true;
+}
+
+/// Keeps a `size` window whose top-left is at `pos` inside `work`.
+pub fn clamp_into(pos: (f64, f64), size: (f64, f64), work: Rect) -> (f64, f64) {
+    let clamp = |v: f64, lo: f64, hi: f64| v.min(hi).max(lo);
+    (
+        clamp(pos.0, work.x, work.x + work.w - size.0),
+        clamp(pos.1, work.y, work.y + work.h - size.1),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,6 +82,22 @@ fn icon_rect(app: &AppHandle, scale: f64) -> Option<Rect> {
 fn place(app: &AppHandle, w: &WebviewWindow, settings: bool) {
     let height = if settings { SETTINGS_HEIGHT } else { HEIGHT };
     let _ = w.set_size(LogicalSize::new(WIDTH, height));
+    if app.state::<Mutex<PopoverState>>().lock().unwrap().moved {
+        // Stay where the user left it, only pulled back if the new size would cross the edge.
+        if let (Ok(pos), Ok(Some(monitor))) = (w.outer_position(), w.current_monitor()) {
+            let wa = monitor.work_area();
+            let work = Rect {
+                x: wa.position.x as f64,
+                y: wa.position.y as f64,
+                w: wa.size.width as f64,
+                h: wa.size.height as f64,
+            };
+            let s = monitor.scale_factor();
+            let (x, y) = clamp_into((pos.x as f64, pos.y as f64), (WIDTH * s, height * s), work);
+            let _ = w.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+            return;
+        }
+    }
     let scale = w.scale_factor().unwrap_or(1.0);
     let icon = icon_rect(app, scale);
     let monitor = match icon {
@@ -150,5 +183,14 @@ mod tests {
         let work = Rect { x: 0.0, y: 40.0, w: 1920.0, h: 1040.0 };
         let icon = Rect { x: 900.0, y: 4.0, w: 32.0, h: 32.0 };
         assert_eq!(anchor(icon, (360.0, 604.0), work), (736.0, 48.0));
+    }
+
+    #[test]
+    fn moved_popover_is_kept_inside_the_work_area() {
+        let work = Rect { x: 0.0, y: 0.0, w: 1920.0, h: 1040.0 };
+        assert_eq!(clamp_into((100.0, 200.0), (360.0, 604.0), work), (100.0, 200.0));
+        // Growing back from Settings (460) to 604 near the bottom edge pulls it up.
+        assert_eq!(clamp_into((100.0, 500.0), (360.0, 604.0), work), (100.0, 436.0));
+        assert_eq!(clamp_into((-50.0, -10.0), (360.0, 604.0), work), (0.0, 0.0));
     }
 }

@@ -209,4 +209,10 @@ fn quit(app: AppHandle) {
     app.exit(0);
 }
 
-crate::area_commands![get_settings, set_settings, refresh_now, toggle_window, show_popover, hide_popover, set_popover_mode, quit];
+/// The popover's drag area was grabbed: from now on it stays where the user puts it.
+#[tauri::command]
+fn popover_drag_started(app: AppHandle) {
+    popover::mark_moved(&app);
+}
+
+crate::area_commands![get_settings, set_settings, refresh_now, toggle_window, show_popover, hide_popover, set_popover_mode, popover_drag_started, quit];

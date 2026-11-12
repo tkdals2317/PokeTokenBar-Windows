@@ -31,7 +31,7 @@
   --red: #ff3b30;
   --pace-marker: rgba(0, 0, 0, 0.47); /* primary × 0.55 */
 
-  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font: "Pretendard Variable", Pretendard, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --fs-big: 28px; /* today's total, bold */
   --fs-headline: 13px; /* semibold */
   --fs-body: 13px;

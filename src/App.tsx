@@ -2,6 +2,7 @@
 // Settings replacing the content. Owner: foundation. Tab bodies are owned by their areas.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import "./shell/shell.css";
 import { legacyDict } from "./i18n";
@@ -15,6 +16,21 @@ import HomeTab from "./areas/home-usage/HomeTab";
 import ShopTab from "./areas/shop-bag-dex/ShopTab";
 import BagTab from "./areas/shop-bag-dex/BagTab";
 import CollectionTab from "./areas/shop-bag-dex/CollectionTab";
+
+/** The popover has no title bar: pressing on an element marked `data-drag` itself (not on a
+ * control inside it) moves the window, and the shell then stops re-anchoring it to the tray. */
+function useWindowDrag() {
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0 || !(e.target instanceof HTMLElement) || !e.target.hasAttribute("data-drag")) return;
+      e.preventDefault();
+      invoke("popover_drag_started");
+      getCurrentWindow().startDragging();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+}
 
 const TABS: Record<Tab, (p: TabProps) => React.ReactNode> = {
   home: HomeTab,
@@ -40,6 +56,7 @@ export default function App() {
     invoke("set_popover_mode", { settings: showSettings });
   }, [showSettings]);
   const closeSettings = useCallback(() => setShowSettings(false), []);
+  useWindowDrag();
 
   if (!settings) return null;
   const lang = settings.language;
@@ -53,7 +70,8 @@ export default function App() {
         {showSettings ? (
           <SettingsScreen settings={settings} save={saveSettings} companion={companion} updater={updater} onClose={closeSettings} />
         ) : (
-          <div className="popover">
+          <div className="popover" data-drag>
+            <div className="drag-handle" data-drag title={t.dragToMove} />
             <UpdateBanner updater={updater} settings={settings} save={saveSettings} />
             <Segmented
               options={[["home", t.home], ["shop", t.shop], ["bag", t.bag], ["collection", t.collection]]}

@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
 import "./kit/tokens.css";
 import "./kit/kit.css";
 import App from "./App";

@@ -48,7 +48,13 @@
 .kit-segmented button {
   flex: 1; position: relative; border: none; border-radius: 5px; background: none; cursor: pointer;
   font: inherit; font-size: var(--fs-body); color: var(--text);
+  /* The legacy `button` rule in App.css adds 5px 9px padding, which pushed labels below the
+     24 px track and wrapped two-word labels ("남은 양"). */
+  padding: 0 4px; display: flex; align-items: center; justify-content: center; line-height: 1; white-space: nowrap;
 }
+/* The selected segment already shows the state; WebView2 re-applies focus-visible when the popover
+   is reopened, which drew a thick ring around the tab. */
+.kit-segmented button:focus-visible { outline: none; }
 .kit-segmented button + button:not(.on)::before {
   content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 1px; background: var(--seg-divider);
 }
@@ -56,3 +62,16 @@
 .kit-segmented button.on + button::before { display: none; }
 
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Windows draws a wide classic scrollbar with arrow buttons; use a thin macOS-like one instead. */
+::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.22); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(0, 0, 0, 0.38); }
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.25); }
+  ::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.4); }
+}

@@ -65,7 +65,7 @@ export function Footer(props: {
   const { usage, settings } = props;
   const petOn = settings.floating_pet_enabled;
   return (
-    <footer className="popover-footer">
+    <footer className="popover-footer" data-drag>
       {props.tab === "home" && (
         <>
           <IconButton icon="refresh" label={t.refreshNow} onClick={() => invoke("refresh_now")} />
@@ -79,7 +79,7 @@ export function Footer(props: {
           )}
         </>
       )}
-      <span style={{ flex: 1 }} />
+      <span style={{ flex: 1, alignSelf: "stretch" }} data-drag />
       <IconButton
         icon={petOn ? "eye" : "eyeSlash"}
         label={petOn ? t.hidePet : t.showPet}
