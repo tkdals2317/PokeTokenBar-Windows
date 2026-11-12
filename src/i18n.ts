@@ -1,3 +1,7 @@
+// LEGACY (frozen): the pre-parity ko/en/ja dictionary. Do not add keys here; each area moves its
+// strings into `src/areas/<area>/strings.ts` (kit/i18n `defineStrings`) and stops importing this.
+import type { Lang as AppLang } from "./kit/i18n";
+
 export type Lang = "ko" | "en" | "ja";
 
 const ko = {
@@ -268,11 +272,13 @@ const ja: Dict = {
   updateError: "アップデート情報を取得できませんでした",
 };
 
+export type LegacyDict = Dict;
 export const DICTS: Record<Lang, Dict> = { ko, en, ja };
-export const LANG_LABELS: Record<Lang, string> = { ko: "한국어", en: "English", ja: "日本語" };
+/** Legacy dictionary for any app language; es/fr/pt/de/ru get English. */
+export const legacyDict = (l: AppLang): Dict => DICTS[l as Lang] ?? en;
 
 /** PokéAPI language code for species names. */
-export const nameLang = (l: Lang) => (l === "ja" ? "ja-hrkt" : l);
+export const nameLang = (l: AppLang) => (l === "ja" ? "ja-hrkt" : l);
 
 const NATURES: Record<string, [string, string, string]> = {
   hardy: ["노력", "Hardy", "がんばりや"], lonely: ["외로움", "Lonely", "さみしがり"],
@@ -290,5 +296,5 @@ const NATURES: Record<string, [string, string, string]> = {
   quirky: ["변덕", "Quirky", "きまぐれ"],
 };
 
-export const natureName = (key: string, l: Lang) =>
-  NATURES[key]?.[l === "ko" ? 0 : l === "en" ? 1 : 2] ?? key;
+export const natureName = (key: string, l: AppLang) =>
+  NATURES[key]?.[l === "ko" ? 0 : l === "ja" ? 2 : 1] ?? key;

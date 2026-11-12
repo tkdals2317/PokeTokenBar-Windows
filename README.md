@@ -42,6 +42,18 @@ is unsigned, so if Windows SmartScreen appears choose **More info → Run anyway
 After install: an egg appears on the desktop and the app icon sits in the tray (taskbar `^` area).
 Click the pet to open the usage window, right-click it for size and other options.
 
+## Agent hooks
+
+With **Settings → Floating Pet → Agent activity** on, coding agents can drive the pet through a
+`poketokenbar://agent` link (`state` = `working` | `waiting` | `done` | `idle`, optional `label` and `message`).
+Guard with `tasklist` so a hook never launches the app when it is not running:
+
+```bat
+tasklist /FI "IMAGENAME eq PokeTokenBar.exe" | find /I "PokeTokenBar.exe" >nul && start "" "poketokenbar://agent?state=done&label=my-task"
+```
+
+PowerShell: `if (Get-Process PokeTokenBar -ErrorAction SilentlyContinue) { Start-Process "poketokenbar://agent?state=working&label=my-task" }`
+
 ## Dev
 
 ```bash

@@ -1,19 +1,6 @@
-:root {
-  --fg: #1f2328;
-  --bg: #f6f8fa;
-  --card: #ffffff;
-  --muted: #59636e;
-  --track: #e5e8eb;
-  --accent: #2da44e;
-  font-family: system-ui, sans-serif;
-  color: var(--fg);
-  background: var(--bg);
-}
-@media (prefers-color-scheme: dark) {
-  :root { --fg: #e6edf3; --bg: #0d1117; --card: #161b22; --muted: #9198a1; --track: #30363d; }
-}
-body { margin: 0; }
-.container { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+/* LEGACY component styles from v0.2, kept until each area restyles its components to the spec.
+   Old variable names map onto kit/tokens.css. Shell layout lives in shell/shell.css. */
+:root { --fg: var(--text); --bg: var(--popover-bg); --card: var(--card-bg); --muted: var(--text-2); }
 .card { background: var(--card); border-radius: 12px; padding: 14px; }
 .center { text-align: center; }
 h2 { margin: 4px 0; font-size: 20px; }
@@ -30,7 +17,6 @@ h2 { margin: 4px 0; font-size: 20px; }
 .progress { margin-top: 8px; }
 .bar { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent); transition: width 0.4s; }
-.toast { background: var(--accent); color: #fff; border-radius: 10px; padding: 10px; text-align: center; font-weight: 600; }
 
 /* Floating pet window: fully transparent, sprite sits on the bottom edge. */
 :root.pet-window, :root.pet-window body { background: transparent; }
@@ -54,11 +40,6 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.link { border: none; background: none; color: var(--accent); padding: 2px; }
 .actions { display: flex; justify-content: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
-/* Tabs */
-.tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 4px; padding: 8px 12px; background: var(--bg); }
-.tabs button { flex: 1; border: none; background: none; color: var(--muted); font-weight: 600; }
-.tabs button.on { background: var(--card); color: var(--fg); }
-.tabs button.icon { flex: 0 0 auto; }
 .segmented { display: flex; background: var(--bg); border-radius: 8px; padding: 2px; margin-bottom: 8px; }
 .segmented button { flex: 1; border: none; background: none; color: var(--muted); }
 .segmented button.on { background: var(--card); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
@@ -81,17 +62,3 @@ button.link { border: none; background: none; color: var(--accent); padding: 2px
 .modal .card { width: 100%; max-width: 300px; }
 .sprite.big { height: 140px; }
 
-/* Settings */
-.settings h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-.setting-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--track); }
-.setting-row:first-of-type { border-top: none; }
-.hint { font-size: 11px; color: var(--muted); }
-.slider { display: flex; align-items: center; gap: 6px; }
-.slider input { width: 120px; accent-color: var(--accent); }
-.slider .value { width: 44px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
-.switch { appearance: none; width: 36px; height: 20px; border-radius: 10px; background: var(--track); position: relative; cursor: pointer; flex-shrink: 0; transition: background 0.2s; }
-.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.2s; }
-.switch:checked { background: var(--accent); }
-.switch:checked::after { transform: translateX(16px); }
-.switch:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.dot { display: inline-block; width: 7px; height: 7px; margin-left: 4px; border-radius: 50%; background: #cf222e; vertical-align: top; }

@@ -25,3 +25,6 @@ dist-ssr
 
 # Downloaded installers for testers
 /release/
+
+# Agent worktrees
+/.claude/worktrees/
