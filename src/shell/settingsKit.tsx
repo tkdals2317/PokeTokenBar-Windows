@@ -17,7 +17,8 @@ export type SettingsRowProps = {
 };
 
 /** One row (or a few rows that belong together). `order` sorts within the group; use pet-settings-misc.md §3.3 # × 10. */
-export type SettingsRow = { id: string; group: SettingsGroup; order: number; Row: ComponentType<SettingsRowProps> };
+/** `footer` rows render under the group's card (caption hints like "All off shows only the character"). */
+export type SettingsRow = { id: string; group: SettingsGroup; order: number; Row: ComponentType<SettingsRowProps>; footer?: boolean };
 
 /** Row primitive: label + optional hint on the left, control on the right (padding 12/8, min height 38). */
 export function SettingRow({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children?: ReactNode }) {

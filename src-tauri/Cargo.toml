@@ -49,6 +49,11 @@ tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+# pet-settings-misc: tray sprite decoding, save file dialogs, poketokenbar:// scheme
+gif = "0.13"
+png = "0.17"
+tauri-plugin-dialog = "2"
+tauri-plugin-deep-link = "2"
 
 [target.'cfg(windows)'.dependencies]
 # providers area: env overrides set with setx live in the registry
