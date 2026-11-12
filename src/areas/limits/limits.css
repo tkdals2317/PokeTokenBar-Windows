@@ -1,0 +1,94 @@
+/* Limits section and settings rows (limits.md §5). Owner: limits area. Sizes follow macOS:
+   callout 12 px, caption/caption2 10 px; colours come from kit/tokens.css. */
+.lim { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.lim-head { display: flex; align-items: center; gap: 4px; position: relative; }
+.lim-caption { font-size: var(--fs-caption); }
+.lim-medium { font-weight: 500; }
+.lim-spacer { flex: 1; min-width: 0; }
+.lim-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lim-orange { color: var(--orange); }
+.lim-red { color: var(--red); }
+.lim-glyph { display: block; flex-shrink: 0; }
+
+/* quotaRow */
+.lim .kit-tooltip-host { display: flex; flex-direction: column; }
+.lim-rows { display: flex; flex-direction: column; gap: 8px; }
+.lim-rows.tight { gap: 4px; }
+.lim-rows-item { display: flex; flex-direction: column; gap: 8px; }
+.lim-row { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.lim-row-top { display: flex; align-items: baseline; gap: 6px; }
+.lim-name { font-size: var(--fs-callout); white-space: nowrap; }
+.lim-detail { font-size: var(--fs-caption); color: var(--text-2); white-space: nowrap; }
+.lim-reset { font-size: var(--fs-caption); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lim-pct { font-size: var(--fs-callout); white-space: nowrap; }
+.lim-bar-cell { height: 12px; display: flex; flex-direction: column; justify-content: center; }
+
+.lim-meta { font-size: var(--fs-caption); color: var(--text-3); }
+.lim-meta-row { display: flex; align-items: baseline; gap: 8px; }
+.lim-bucket { padding-top: 2px; }
+.lim-stale { font-size: var(--fs-caption); color: var(--orange); }
+.lim-hint { font-size: var(--fs-caption); color: var(--text-2); }
+.lim-error { font-size: var(--fs-caption); color: var(--orange); }
+
+/* Notices: Claude (radius 8, orange 12 %) and the generic expired box (radius 6, orange 10 %). */
+.lim-notice, .lim-expired { display: flex; flex-direction: column; gap: 4px; padding: 8px; }
+.lim-notice { border-radius: 8px; background: var(--banner-warn-bg); }
+.lim-expired { border-radius: 6px; background: color-mix(in srgb, var(--orange) 10%, transparent); }
+.lim-notice-head { display: flex; align-items: center; gap: 6px; }
+.lim-notice-title { font-size: var(--fs-caption); font-weight: 600; }
+.lim-notice-title.lim-medium { font-weight: 500; }
+.lim-retry { padding-top: 2px; }
+
+.lim-refresh { display: flex; flex-direction: column; gap: 2px; }
+.lim-refresh-row { display: flex; align-items: center; gap: 6px; }
+
+.lim-groups { display: flex; flex-direction: column; gap: 10px; }
+.lim-group { display: flex; flex-direction: column; gap: 4px; }
+.lim-group-title { font-size: var(--fs-caption); font-weight: 600; color: var(--text-2); }
+
+.lim-forecast { display: flex; align-items: center; gap: 4px; padding-left: 2px; font-size: var(--fs-caption); }
+.lim-block { display: flex; align-items: baseline; gap: 6px; font-size: var(--fs-caption); }
+
+/* Provider status banner */
+.lim-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lim-status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+/* "?" help card (macOS 250 pt popover) */
+.lim-help { position: relative; display: inline-flex; }
+.lim-help-btn { border: none; background: none; padding: 0; color: var(--text-2); cursor: pointer; display: inline-flex; }
+.lim-help-card {
+  position: absolute; top: 16px; left: -60px; z-index: 50; width: 250px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 8px;
+  background: var(--card-bg); border: 1px solid var(--card-border); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+.lim-help-title { font-size: var(--fs-caption); font-weight: 600; }
+.lim-help-actions { display: flex; justify-content: flex-end; }
+
+/* macOS small bordered button and borderedProminent mini */
+.lim-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 20px;
+  padding: 0 8px; border-radius: 5px; border: 1px solid var(--separator); cursor: pointer;
+  background: var(--card-bg); color: var(--text); font: inherit; font-size: 11px; white-space: nowrap;
+}
+.lim-btn:disabled { opacity: 0.6; cursor: default; }
+.lim-btn.prominent { height: 18px; border: none; background: var(--accent); color: #fff; font-size: 10px; }
+.lim-spinner {
+  width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text-3); border-top-color: var(--text-2);
+  animation: lim-spin 0.8s linear infinite;
+}
+@keyframes lim-spin { to { transform: rotate(360deg); } }
+
+/* Settings */
+.lim-set { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; }
+.lim-set-line { display: flex; align-items: center; gap: 8px; }
+.lim-badge-ok { font-size: var(--fs-caption); color: var(--green); }
+.lim-badge-bad { font-size: var(--fs-caption); color: var(--orange); }
+.lim-key-input {
+  flex: 1; max-width: 220px; min-width: 0; height: 22px; box-sizing: border-box; padding: 0 6px;
+  border-radius: 5px; border: 1px solid var(--separator); background: var(--card-bg); color: var(--text); font: inherit; font-size: 12px;
+}
+.lim-set select { max-width: 220px; }
+.lim-slider { display: flex; align-items: center; gap: 6px; }
+.lim-slider input { width: 120px; accent-color: var(--accent); }
+.lim-slider .value { width: 38px; text-align: right; font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.lim-tertiary-note { font-size: var(--fs-caption); color: var(--text-3); }

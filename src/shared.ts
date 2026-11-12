@@ -81,6 +81,7 @@ export type LimitSettings = {
   warn_threshold: number;
   crit_threshold: number;
   status_checks_enabled: boolean;
+  /** "automatic" | "default" | "highest" | "account:<id>" */
   claude_tracked_account: string;
 };
 // #endregion
@@ -231,8 +232,42 @@ export function usePopoverOpened(cb: (p: PopoverOpened) => void) {
 }
 
 // #region limits
-export type LimitWindow = { key: string; used_percent: number; resets_at: string | null };
-export type ProviderLimits = { provider: string; windows: LimitWindow[]; error: string | null };
+/** One limit row (limits/mod.rs `Window`). `label` + `arg` name it; see areas/limits/model.ts. */
+export type LimitWindow = {
+  key: string;
+  label: string;
+  arg: string | null;
+  group: string | null;
+  used_percent: number;
+  resets_at: string | null;
+  span_secs: number | null;
+  detail: string | null;
+  not_started: boolean;
+  expired: boolean;
+};
+export type ClaudeAccount = {
+  id: string;
+  key_prefix: string;
+  folder: string;
+  title: string;
+  is_default: boolean;
+  tracked: boolean;
+  session_key: boolean;
+};
+export type ProviderLimits = {
+  provider: string;
+  account: ClaudeAccount | null;
+  windows: LimitWindow[];
+  error: string | null;
+  updated_at: string | null;
+  auth_expired: "oauth" | "sessionKey" | "token" | null;
+  plan: string | null;
+  account_label: string | null;
+  limit_reached: boolean;
+  message: string | null;
+  remaining_usd: number | null;
+  products: { name: string; percent: number }[];
+};
 // #endregion
 
 /** LEGACY context for components still on the frozen `src/i18n.ts` dictionary. */
