@@ -1,419 +1,84 @@
-//! Pokémon companion: egg → hatch → evolve → graduate into the Pokédex.
-//! Balance is ported from the original `CompanionModel.swift` / `CompanionStore.swift`.
+//! Pokémon companion: egg → hatch → evolve → graduate into the Pokédex (docs/parity/companion.md).
+//! Rules live in `state.rs` (pure); this file wires them to usage refreshes, PokéAPI and the UI.
 //! Owner: companion area. See docs/parity/ARCHITECTURE.md.
 
 pub mod api;
+pub mod balance;
+pub mod form;
 pub mod pokeapi;
+pub mod profile;
+pub mod state;
+pub mod text;
 
+#[allow(unused_imports)] // re-exported for other areas (economy reads `clamp_difficulty`)
+pub use balance::{DIFFICULTY_RANGE, EGG_HATCH_THRESHOLD, Rarity, clamp_difficulty, phase_threshold, scaled};
+#[allow(unused_imports)]
+pub use state::{DexEntry, Event, EvoNode, Line, Mon, Names, State};
+
+use crate::model::{EV_COMPANION, EV_COMPANION_EVENT, UsageSnapshot};
+use crate::store::save_json;
 use fastrand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use crate::store::{load_json, save_json};
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager};
 
-pub const EGG_HATCH_THRESHOLD: u64 = 5_000_000;
-pub const SHINY_DENOMINATOR: u64 = 64;
 /// Gen-V animated sprites exist up to #649, so lines are cut there.
 pub const MAX_SPECIES_ID: u32 = 649;
 pub const DITTO_ID: u32 = 132;
 
+/// `PokemonNature.allCases` order (Model:400-404); the nature roll indexes into it.
 pub const NATURES: [&str; 25] = [
     "hardy", "lonely", "brave", "adamant", "naughty", "bold", "docile", "relaxed", "impish", "lax",
     "timid", "hasty", "serious", "jolly", "naive", "modest", "mild", "quiet", "bashful", "rash",
     "calm", "gentle", "sassy", "careful", "quirky",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Rarity {
-    Common,
-    Uncommon,
-    Rare,
-    Legendary,
-}
-
-impl Rarity {
-    pub fn from(capture_rate: u32, legendary_or_mythical: bool) -> Self {
-        match capture_rate {
-            _ if legendary_or_mythical => Rarity::Legendary,
-            0..=45 => Rarity::Rare,
-            46..=120 => Rarity::Uncommon,
-            _ => Rarity::Common,
-        }
-    }
-
-    pub fn graduation_total(self) -> u64 {
-        match self {
-            Rarity::Common => 750_000_000,
-            Rarity::Uncommon => 1_875_000_000,
-            Rarity::Rare => 3_000_000_000,
-            Rarity::Legendary => 6_000_000_000,
-        }
-    }
-}
-
-pub const DIFFICULTY_RANGE: (f64, f64) = (0.1, 2.0);
-
-/// User growth multiplier: below 1 grows faster, above 1 slower. Bad saved values fall back to 1.
-pub fn clamp_difficulty(d: f64) -> f64 {
-    if d.is_finite() && d > 0.0 { d.clamp(DIFFICULTY_RANGE.0, DIFFICULTY_RANGE.1) } else { 1.0 }
-}
-
-pub fn scaled(base: u64, difficulty: f64) -> u64 {
-    ((base as f64 * clamp_difficulty(difficulty)).round() as u64).max(1)
-}
-
-/// Tokens needed to leave stage `stage_index` (0-based) of a `k`-form line.
-/// Stage i costs T·i / (k(k+1)/2), so every line of a rarity sums to the same total T.
-pub fn phase_threshold(rarity: Rarity, k: usize, stage_index: usize) -> u64 {
-    let k = k.max(1) as f64;
-    let i = (stage_index + 1) as f64;
-    let t = rarity.graduation_total() as f64;
-    ((t * i / (k * (k + 1.0) / 2.0)).round() as u64).max(1)
-}
-
+/// Keys this area owns inside `settings.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EvoNode {
-    pub id: u32,
-    pub children: Vec<EvoNode>,
-}
-
-impl EvoNode {
-    pub fn find(&self, id: u32) -> Option<&EvoNode> {
-        if self.id == id {
-            return Some(self);
-        }
-        self.children.iter().find_map(|c| c.find(id))
-    }
-
-    pub fn final_ids(&self) -> Vec<u32> {
-        if self.children.is_empty() {
-            return vec![self.id];
-        }
-        self.children.iter().flat_map(EvoNode::final_ids).collect()
-    }
-
-    pub fn all_ids(&self) -> Vec<u32> {
-        let mut v = vec![self.id];
-        self.children.iter().for_each(|c| v.extend(c.all_ids()));
-        v
-    }
-
-    /// Drops species without an animated sprite, and everything after them.
-    pub fn keep_animated(&self) -> Option<EvoNode> {
-        (self.id <= MAX_SPECIES_ID).then(|| EvoNode {
-            id: self.id,
-            children: self
-                .children
-                .iter()
-                .filter_map(EvoNode::keep_animated)
-                .collect(),
-        })
-    }
-}
-
-/// species id → language code → name
-pub type Names = HashMap<u32, HashMap<String, String>>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Line {
-    pub base_id: u32,
-    pub tree: EvoNode,
-    pub rarity: Rarity,
-    pub names: Names,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Mon {
-    pub line: Line,
-    /// Realized evolution path so far.
-    pub path_ids: Vec<u32>,
-    /// Full route chosen at hatch (branches resolved up front).
-    pub planned_ids: Vec<u32>,
-    pub stage_index: usize,
-    pub used_at_stage: u64,
-    pub is_shiny: bool,
-    pub nature: String,
-}
-
-impl Mon {
-    pub fn current_id(&self) -> u32 {
-        self.path_ids[self.stage_index.min(self.path_ids.len() - 1)]
-    }
-    pub fn threshold(&self, difficulty: f64) -> u64 {
-        scaled(phase_threshold(self.line.rarity, self.planned_ids.len(), self.stage_index), difficulty)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DexEntry {
-    pub base_id: u32,
-    pub final_id: u32,
-    pub chain: Vec<u32>,
-    pub rarity: Rarity,
-    pub is_shiny: bool,
-    pub nature: String,
-    pub names: Names,
-    pub caught_at: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum Event {
-    Hatched { id: u32, shiny: bool },
-    Evolved { id: u32 },
-    Graduated { id: u32 },
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct State {
-    /// Usage before the first observation isn't counted (no retroactive growth).
-    pub baseline_set: bool,
-    /// provider → today's tokens already credited.
-    pub ledger: HashMap<String, u64>,
-    pub last_date: String,
-    pub used_since_install: u64,
-    pub egg_usage: u64,
-    pub active: Option<Mon>,
-    pub dex: Vec<DexEntry>,
-    /// "base:final" pairs, used to prefer new branches and down-weight repeats.
-    pub collected_finals: HashSet<String>,
-    /// Growth multiplier from Settings. 0 (older saves) means 1.
-    pub growth_difficulty: f64,
-    /// Wallet, bag and candy grants. Owned by the shop-bag-dex area (`economy`), saved in the same file.
-    #[serde(flatten)]
-    pub economy: crate::economy::EconomyState,
+pub struct CompanionSettings {
+    /// Species shown by the floating pet and tray instead of the active Pokémon (must be owned).
+    pub representative: Option<u32>,
+    pub representative_form: Option<String>,
+    pub companion_notifications: bool,
 }
 
-impl State {
-    pub fn difficulty(&self) -> f64 {
-        clamp_difficulty(self.growth_difficulty)
-    }
-
-    pub fn egg_threshold(&self) -> u64 {
-        scaled(EGG_HATCH_THRESHOLD, self.difficulty())
-    }
-
-    /// Changes the multiplier and rescales banked progress so the progress bars don't jump.
-    pub fn set_difficulty(&mut self, new: f64) {
-        let (old, new) = (self.difficulty(), clamp_difficulty(new));
-        let rescale = |v: u64| (v as f64 * new / old).round() as u64;
-        self.egg_usage = rescale(self.egg_usage);
-        if let Some(m) = self.active.as_mut() {
-            m.used_at_stage = rescale(m.used_at_stage);
-        }
-        self.growth_difficulty = new;
-    }
-
-    /// Localized species name from the active line or the Pokédex.
-    pub fn name_of(&self, id: u32, lang: &str) -> String {
-        let names = self
-            .active
-            .iter()
-            .map(|m| &m.line.names)
-            .chain(self.dex.iter().rev().map(|d| &d.names))
-            .find_map(|n| n.get(&id));
-        let pick = |l: &str| names.and_then(|n| n.get(l)).cloned();
-        let lang = if lang == "ja" { "ja-hrkt" } else { lang };
-        pick(lang).or_else(|| pick("en")).unwrap_or_else(|| format!("#{id}"))
-    }
-
-    /// Credits today's per-provider growth since the last call. Returns the new tokens.
-    pub fn credit(&mut self, today: &HashMap<String, u64>, date: &str) -> u64 {
-        if !self.baseline_set {
-            self.baseline_set = true;
-            self.ledger = today.clone();
-            self.last_date = date.to_string();
-            return 0;
-        }
-        // Saves before v0.3 keyed Claude Code as "claude"; providers now use the macOS id.
-        if let Some(v) = self.ledger.remove("claude") {
-            self.ledger.entry("claude_code".into()).or_insert(v);
-        }
-        let delta = if date != self.last_date {
-            // A new day's totals aren't comparable to yesterday's: count them all.
-            self.last_date = date.to_string();
-            self.ledger = today.clone();
-            today.values().sum()
-        } else {
-            let mut delta = 0;
-            for (provider, &current) in today {
-                match self.ledger.get(provider) {
-                    // Newly seen provider: seed, don't backfill its past logs.
-                    None => {}
-                    // Regression (logs rotated/deleted): rebase this provider only.
-                    Some(&prev) if current < prev => {}
-                    Some(&prev) => delta += current - prev,
-                }
-                self.ledger.insert(provider.clone(), current);
-            }
-            delta
-        };
-        self.used_since_install += delta;
-        delta
-    }
-
-    pub fn ready_to_hatch(&self) -> bool {
-        self.active.is_none() && self.baseline_set && self.egg_usage >= self.egg_threshold()
-    }
-
-    /// Feeds tokens to the egg or the active Pokémon.
-    pub fn feed(&mut self, delta: u64, rng: &mut Rng) -> Vec<Event> {
-        if self.active.is_none() {
-            self.egg_usage += delta;
-            return vec![];
-        }
-        self.active.as_mut().unwrap().used_at_stage += delta;
-        let mut events = vec![];
-        let difficulty = self.difficulty();
-        while let Some(mon) = self.active.as_mut() {
-            let thr = mon.threshold(difficulty);
-            if mon.used_at_stage < thr {
-                break;
-            }
-            let node = mon.line.tree.find(mon.current_id()).cloned();
-            let Some(node) = node.filter(|n| !n.children.is_empty()) else {
-                events.push(self.graduate());
-                break;
-            };
-            let next_idx = mon.stage_index + 1;
-            let next = match mon.planned_ids.get(next_idx) {
-                Some(&p) if node.children.iter().any(|c| c.id == p) => p,
-                _ => {
-                    // Stale plan: re-plan from here.
-                    let base = mon.line.base_id;
-                    let route = plan(&node, base, &self.collected_finals, rng);
-                    let mon = self.active.as_mut().unwrap();
-                    mon.planned_ids.truncate(mon.stage_index);
-                    mon.planned_ids.extend(route);
-                    mon.planned_ids[next_idx]
-                }
-            };
-            let mon = self.active.as_mut().unwrap();
-            mon.path_ids.truncate(next_idx);
-            mon.path_ids.push(next);
-            mon.stage_index = next_idx;
-            mon.used_at_stage -= thr; // overflow carries over
-            events.push(Event::Evolved { id: next });
-        }
-        events
-    }
-
-    fn graduate(&mut self) -> Event {
-        let mon = self.active.take().unwrap();
-        let final_id = mon.current_id();
-        self.collected_finals
-            .insert(format!("{}:{}", mon.line.base_id, final_id));
-        let names = mon
-            .path_ids
-            .iter()
-            .filter_map(|id| mon.line.names.get(id).map(|n| (*id, n.clone())))
-            .collect();
-        self.dex.push(DexEntry {
-            base_id: mon.line.base_id,
-            final_id,
-            chain: mon.path_ids,
-            rarity: mon.line.rarity,
-            is_shiny: mon.is_shiny,
-            nature: mon.nature,
-            names,
-            caught_at: chrono::Local::now().to_rfc3339(),
-        });
-        self.egg_usage = 0;
-        Event::Graduated { id: final_id }
-    }
-
-    pub fn hatch(&mut self, line: Line, rng: &mut Rng) -> Vec<Event> {
-        let overflow = self.egg_usage.saturating_sub(self.egg_threshold());
-        self.egg_usage = 0;
-        let is_shiny = rng.u64(..) % SHINY_DENOMINATOR == 0;
-        let nature = NATURES[rng.usize(..NATURES.len())].to_string();
-        let planned_ids = plan(&line.tree, line.base_id, &self.collected_finals, rng);
-        let base_id = line.base_id;
-        self.active = Some(Mon {
-            line,
-            path_ids: vec![base_id],
-            planned_ids,
-            stage_index: 0,
-            used_at_stage: 0,
-            is_shiny,
-            nature,
-        });
-        let mut events = vec![Event::Hatched {
-            id: base_id,
-            shiny: is_shiny,
-        }];
-        events.extend(self.feed(overflow, rng));
-        events
-    }
-
-    pub fn has_collected_base(&self, base_id: u32) -> bool {
-        let prefix = format!("{base_id}:");
-        self.collected_finals.iter().any(|f| f.starts_with(&prefix))
+impl Default for CompanionSettings {
+    fn default() -> Self {
+        CompanionSettings { representative: None, representative_form: None, companion_notifications: true }
     }
 }
 
-/// Prefer a child that still leads to an uncollected final form.
-fn pick_child<'a>(
-    node: &'a EvoNode,
-    base: u32,
-    collected: &HashSet<String>,
-    rng: &mut Rng,
-) -> &'a EvoNode {
-    let fresh: Vec<&EvoNode> = node
-        .children
+impl CompanionSettings {
+    pub fn sanitize(&mut self) {
+        match self.representative {
+            None => self.representative_form = None,
+            Some(id) => self.representative_form = form::resolved(id, self.representative_form.as_deref()),
+        }
+    }
+}
+
+// ---- persistence ----
+
+/// Lenient decode: a field that fails to parse falls back to its default instead of the whole file.
+pub fn decode_state(bytes: &[u8]) -> Result<State, String> {
+    let v: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    if let Ok(s) = serde_json::from_value::<State>(v.clone()) {
+        return Ok(s);
+    }
+    let obj = v.as_object().ok_or("not an object")?;
+    let good: serde_json::Map<String, Value> = obj
         .iter()
-        .filter(|c| {
-            c.final_ids()
-                .iter()
-                .any(|f| !collected.contains(&format!("{base}:{f}")))
-        })
+        .filter(|(k, v)| serde_json::from_value::<State>(json!({ k.as_str(): v })).is_ok())
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let pool: Vec<&EvoNode> = if fresh.is_empty() {
-        node.children.iter().collect()
-    } else {
-        fresh
-    };
-    pool[rng.usize(..pool.len())]
-}
-
-/// Full route from `root` to a final form.
-fn plan(root: &EvoNode, base: u32, collected: &HashSet<String>, rng: &mut Rng) -> Vec<u32> {
-    let mut route = vec![root.id];
-    let mut node = root;
-    while !node.children.is_empty() {
-        node = pick_child(node, base, collected, rng);
-        route.push(node.id);
-    }
-    route
-}
-
-/// Capture-rate weighted pick from `(species id, capture rate)`; collected lines count half.
-pub fn choose_base(index: &[(u32, u32)], state: &State, rng: &mut Rng) -> Option<u32> {
-    let weights: Vec<u64> = index
-        .iter()
-        .map(|&(id, rate)| {
-            let w = rate.max(1) as u64;
-            if state.has_collected_base(id) {
-                (w / 2).max(1)
-            } else {
-                w
-            }
-        })
-        .collect();
-    let total: u64 = weights.iter().sum();
-    if total == 0 {
-        return None;
-    }
-    let mut r = rng.u64(..total);
-    for (i, w) in weights.iter().enumerate() {
-        if r < *w {
-            return Some(index[i].0);
-        }
-        r -= w;
-    }
-    None
+    serde_json::from_value(Value::Object(good)).map_err(|e| e.to_string())
 }
 
 pub struct Store {
@@ -422,8 +87,31 @@ pub struct Store {
 }
 
 impl Store {
+    /// Loads, migrates (difficulty, profiles), sanitizes and repairs the evolution plan.
     pub fn load(path: PathBuf) -> Self {
-        Store { state: load_json(&path), path }
+        let mut state = match fs::read(&path) {
+            Err(_) => State::default(),
+            Ok(bytes) => decode_state(&bytes).unwrap_or_else(|_| {
+                let _ = fs::rename(&path, path.with_extension("json.corrupt"));
+                State::default()
+            }),
+        };
+        let mut rng = Rng::new();
+        state.migrate_difficulty();
+        state.sanitize();
+        state.normalize_evolution(&mut rng);
+        if state.migrate_profiles() {
+            // One recoverable copy before the first save with profiles. Never overwritten.
+            let backup = path.with_file_name("companion.pre-profiles-v1.json");
+            if path.exists() && !backup.exists() {
+                let _ = fs::copy(&path, &backup);
+            }
+        }
+        let store = Store { path, state };
+        if store.path.exists() {
+            store.save();
+        }
+        store
     }
 
     pub fn save(&self) {
@@ -435,293 +123,410 @@ impl Store {
     }
 }
 
-
-// ---- area wiring (see ARCHITECTURE.md) ----
-
-use crate::model::{EV_COMPANION, EV_COMPANION_EVENT, UsageSnapshot};
-use serde_json::{Value, json};
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
-
-/// Keys this area owns inside `settings.json`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CompanionSettings {
-    /// Species shown by the floating pet and tray instead of the active Pokémon.
-    pub representative: Option<u32>,
-    pub companion_notifications: bool,
-}
-
-impl Default for CompanionSettings {
-    fn default() -> Self {
-        CompanionSettings { representative: None, companion_notifications: true }
-    }
-}
-
-impl CompanionSettings {
-    pub fn sanitize(&mut self) {}
-}
-
 /// The one lock for `companion.json`. Economy mutates its block through the same lock.
 pub type SharedStore = Mutex<Store>;
 
 pub fn setup(app: &tauri::App, dir: &Path) -> tauri::Result<()> {
-    app.manage::<SharedStore>(Mutex::new(Store::load(dir.join("companion.json"))));
+    let mut store = Store::load(dir.join("companion.json"));
+    // The Ditto disguise rolls only in release builds, like the bundled-app gate on macOS.
+    store.state.rt.ditto_rolling = !cfg!(debug_assertions);
+    app.manage::<SharedStore>(Mutex::new(store));
     Ok(())
 }
 
-/// Runs `f` on the saved state under the lock, saves, and emits `companion`.
+fn lang(app: &AppHandle) -> String {
+    crate::settings::current(app).shell.language
+}
+
+/// Runs `f` on the saved state under the lock, saves, and emits `companion` (plus notifications,
+/// `companion-event`s and follow-up fetches the change caused).
 pub fn update<T>(app: &AppHandle, f: impl FnOnce(&mut State) -> T) -> T {
-    let store = app.state::<SharedStore>();
-    let mut s = store.lock().unwrap();
-    let out = f(&mut s.state);
-    s.save();
-    let _ = app.emit(EV_COMPANION, view(&s));
+    let lang = lang(app);
+    let out = {
+        let store = app.state::<SharedStore>();
+        let mut s = store.lock().unwrap();
+        s.state.rt.lang = lang;
+        let out = f(&mut s.state);
+        s.save();
+        out
+    };
+    after_change(app, true);
     out
 }
 
-/// What the UI needs: saved state plus the thresholds it can't derive.
-pub fn view(store: &Store) -> Value {
-    let s = &store.state;
-    json!({
-        "active": s.active,
-        "egg_usage": s.egg_usage,
-        "egg_threshold": s.egg_threshold(),
-        "threshold": s.active.as_ref().map(|m| m.threshold(s.difficulty())),
-        "difficulty": s.difficulty(),
-        "dex": s.dex,
+/// Sends what the last change queued, emits the view, keeps the representative owned,
+/// and (optionally) fetches what the new state needs off the calling thread.
+fn after_change(app: &AppHandle, spawn_follow_up: bool) {
+    let settings = crate::settings::current(app);
+    let (outbox, events, view, owned, event_until) = {
+        let store = app.state::<SharedStore>();
+        let mut s = store.lock().unwrap();
+        let st = &mut s.state;
+        let outbox = std::mem::take(&mut st.rt.outbox);
+        let events = std::mem::take(&mut st.rt.events);
+        let owned = settings.companion.representative.is_none_or(|id| st.owns_species(id, settings.companion.representative_form.as_deref()));
+        (outbox, events, view(st, &settings), owned, st.rt.event_until)
+    };
+    // Windows toasts need the installed AUMID; dev builds have none (macOS: bundled app only).
+    if settings.companion.companion_notifications && !cfg!(debug_assertions) {
+        for (title, body) in &outbox {
+            crate::shell::notify(app, title, body);
+        }
+    }
+    let _ = app.emit(EV_COMPANION, view);
+    for e in events {
+        let _ = app.emit(EV_COMPANION_EVENT, e);
+    }
+    if !owned {
+        let mut s = settings.clone();
+        s.companion.representative = None;
+        s.companion.representative_form = None;
+        crate::shell::apply_settings(app, s);
+    }
+    if let Some(until) = event_until {
+        // Re-emit once the levelUp window closes so the status line moves on without a refresh.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(until.saturating_duration_since(Instant::now()) + Duration::from_millis(100));
+            let expired = {
+                let store = app.state::<SharedStore>();
+                let mut s = store.lock().unwrap();
+                let before = s.state.rt.event_until;
+                s.state.expire_events(Instant::now());
+                before.is_some() && s.state.rt.event_until.is_none()
+            };
+            if expired {
+                after_change(&app, false);
+            }
+        });
+    }
+    if spawn_follow_up {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if follow_up(&app) {
+                after_change(&app, false);
+            }
+        });
+    }
+}
+
+static FOLLOW_UP_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Network work the state asked for: the Ditto reveal line, the current species' details,
+/// and localized form names. Returns true when it changed the state.
+fn follow_up(app: &AppHandle) -> bool {
+    if FOLLOW_UP_BUSY.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    let store = app.state::<SharedStore>();
+    let (dir, ditto, current, forms) = {
+        let s = store.lock().unwrap();
+        let st = &s.state;
+        let forms: Vec<u32> = st
+            .active
+            .as_ref()
+            .map(|a| form::form_species(a.base_id()).into_iter().filter_map(|id| form::name_resource(id, a.form.as_deref())).collect())
+            .unwrap_or_default();
+        let current = st.active.as_ref().map(|a| a.current_id()).filter(|id| !st.rt.details.contains_key(id));
+        let forms = forms.into_iter().filter(|r| !st.rt.form_labels.contains_key(r)).collect::<Vec<_>>();
+        (s.dir().to_path_buf(), st.rt.ditto_pending, current, forms)
+    };
+    let mut changed = false;
+    for res in forms {
+        if let Ok(n) = pokeapi::names(&dir, "pokemon-form", &res.to_string()) {
+            store.lock().unwrap().state.rt.form_labels.insert(res, n);
+            changed = true;
+        }
+    }
+    if ditto {
+        if let Ok(line) = pokeapi::line(DITTO_ID) {
+            let lang = lang(app);
+            let mut s = store.lock().unwrap();
+            s.state.rt.lang = lang;
+            s.state.reveal_ditto(line, &mut Rng::new());
+            s.save();
+            changed = true;
+        }
+    }
+    let current = current.or_else(|| {
+        let s = store.lock().unwrap();
+        s.state.active.as_ref().map(|a| a.current_id()).filter(|id| !s.state.rt.details.contains_key(id))
+    });
+    if let Some(id) = current {
+        if let Ok(d) = pokeapi::details(&dir, id) {
+            let mut s = store.lock().unwrap();
+            s.state.add_details(d);
+            s.save();
+            changed = true;
+        }
+    }
+    FOLLOW_UP_BUSY.store(false, Ordering::SeqCst);
+    changed
+}
+
+/// Loads the localized names of the egg's pre-rolled form into the label cache.
+fn warm_form_labels(app: &AppHandle, dir: &Path, base: u32, pending: Option<&str>) {
+    for res in form::form_species(base).into_iter().filter_map(|id| form::name_resource(id, pending)) {
+        if let Ok(n) = pokeapi::names(dir, "pokemon-form", &res.to_string()) {
+            app.state::<SharedStore>().lock().unwrap().state.rt.form_labels.insert(res, n);
+        }
+    }
+}
+
+/// REST fallback when the base index is unavailable: up to 16 uniform probes over 1…649.
+fn choose_base_rest(tier: Option<Rarity>, rng: &mut Rng) -> Option<u32> {
+    for _ in 0..16 {
+        let id = (rng.u64(..) % MAX_SPECIES_ID as u64) as u32 + 1;
+        match pokeapi::base_species(id) {
+            Ok(Some(rate)) if tier.is_none_or(|t| t.includes(rate)) => return Some(id),
+            Ok(_) => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// Egg prefetch and hatch (companion.md §3.6). Network calls run without holding the lock.
+fn hatch_flow(app: &AppHandle, rng: &mut Rng) {
+    let store = app.state::<SharedStore>();
+    let (dir, pending, tier) = {
+        let s = store.lock().unwrap();
+        if s.state.active.is_some() || !s.state.baseline_set {
+            return;
+        }
+        (s.dir().to_path_buf(), s.state.pending_hatch_id, s.state.egg_tier)
+    };
+    let mark_delayed = || {
+        let mut s = store.lock().unwrap();
+        s.state.rt.hatch_retry_delayed = s.state.egg_ready();
+    };
+    let id = match pending {
+        Some(id) => id,
+        None => {
+            let chosen = match pokeapi::base_index(&dir) {
+                Ok(index) => store.lock().unwrap().state.choose_base(&index, rng),
+                Err(_) => choose_base_rest(tier, rng),
+            };
+            let Some(id) = chosen else { return mark_delayed() };
+            let mut s = store.lock().unwrap();
+            s.state.pending_hatch_id = Some(id);
+            s.state.pending_form = s.state.roll_line_form(id, rng);
+            s.save();
+            id
+        }
+    };
+    let Ok(line) = pokeapi::line(id) else { return mark_delayed() };
+    let pending_form = store.lock().unwrap().state.pending_form.clone();
+    warm_form_labels(app, &dir, id, pending_form.as_deref());
+    if let Ok(d) = pokeapi::details(&dir, id) {
+        store.lock().unwrap().state.rt.details.insert(id, d);
+    }
+    let lang = lang(app);
+    let mut s = store.lock().unwrap();
+    if s.state.egg_ready() && s.state.pending_hatch_id == Some(id) {
+        s.state.rt.lang = lang;
+        s.state.hatch(line, rng);
+        s.save();
+    }
+}
+
+/// Seconds since the newest provider usage; 7 days when none reports a time; `None` before data.
+fn idle_secs(snap: &UsageSnapshot) -> Option<u64> {
+    snap.fetched_at.as_ref()?;
+    let newest = snap
+        .providers
+        .iter()
+        .filter_map(|p| chrono::DateTime::parse_from_rfc3339(p.last_usage.as_deref()?).ok())
+        .max();
+    Some(match newest {
+        Some(t) => (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds().max(0) as u64,
+        None => 7 * 86400,
     })
 }
 
-/// Notification titles. es/fr/pt/de/ru fall back to English until this area ports them.
-fn text(lang: &str, key: &str) -> &'static str {
-    match (lang, key) {
-        ("ko", "hatched") => "알이 부화했어요!",
-        ("ko", "shiny") => "✨ 이로치가 태어났어요!",
-        ("ko", "evolved") => "진화했어요!",
-        ("ko", "graduated") => "졸업! 도감에 등록됐어요",
-        ("ja", "hatched") => "タマゴがかえった！",
-        ("ja", "shiny") => "✨ 色違いが生まれた！",
-        ("ja", "evolved") => "進化した！",
-        ("ja", "graduated") => "卒業！図鑑に登録されました",
-        (_, "hatched") => "Your egg hatched!",
-        (_, "shiny") => "✨ A shiny hatched!",
-        (_, "evolved") => "Evolved!",
-        (_, "graduated") => "Graduated! Added to the Pokédex",
-        _ => "",
-    }
-}
-
-/// Hatches the egg if it's ready. Network calls run without holding the store lock.
-fn hatch_if_ready(app: &AppHandle, rng: &mut Rng) -> Vec<Event> {
-    let store = app.state::<SharedStore>();
-    let dir = {
-        let s = store.lock().unwrap();
-        if !s.state.ready_to_hatch() {
-            return vec![];
-        }
-        s.dir().to_path_buf()
-    };
-    // Any failure keeps the egg; the next tick retries.
-    let Ok(index) = pokeapi::base_index(&dir) else { return vec![] };
-    let Some(base) = choose_base(&index, &store.lock().unwrap().state, rng) else {
-        return vec![];
-    };
-    let Ok(line) = pokeapi::line(base) else { return vec![] };
-    let mut s = store.lock().unwrap();
-    if !s.state.ready_to_hatch() {
-        return vec![];
-    }
-    s.state.hatch(line, rng)
+fn limit_warning(app: &AppHandle, crit: f64) -> bool {
+    crate::limits::current(app).iter().flat_map(|l| l.windows.iter()).any(|w| w.used_percent >= crit)
 }
 
 /// Called by the shell after every usage refresh: credit growth, hatch, notify, emit.
 pub fn on_usage(app: &AppHandle, snap: &UsageSnapshot) {
+    let settings = crate::settings::current(app);
     let date = crate::model::today_key();
     let today = snap.today_by_provider(&date);
+    let has_usage_data = snap.fetched_at.is_some() && !snap.providers.is_empty();
+    let has_current = has_usage_data && !today.is_empty();
+    let tokens_today: u64 = today.values().sum();
+    let tpm: f64 = snap.providers.iter().filter_map(|p| p.active_block.as_ref()).map(|b| b.tokens_per_minute).sum();
+    let warning = limit_warning(app, settings.limits.crit_threshold);
     let mut rng = Rng::new();
-    let store = app.state::<SharedStore>();
-    let mut events = {
+    {
+        let store = app.state::<SharedStore>();
         let mut s = store.lock().unwrap();
-        let delta = s.state.credit(&today, &date);
-        s.state.feed(delta, &mut rng)
-    };
-    events.extend(hatch_if_ready(app, &mut rng));
-
-    let settings = crate::settings::current(app);
-    let s = store.lock().unwrap();
-    s.save();
-    let _ = app.emit(EV_COMPANION, view(&s));
-    for e in events {
-        if settings.companion.companion_notifications {
-            let (key, id) = match e {
-                Event::Hatched { id, shiny: true } => ("shiny", id),
-                Event::Hatched { id, .. } => ("hatched", id),
-                Event::Evolved { id } => ("evolved", id),
-                Event::Graduated { id } => ("graduated", id),
-            };
-            let lang = &settings.shell.language;
-            crate::shell::notify(app, text(lang, key), &s.state.name_of(id, lang));
+        let st = &mut s.state;
+        st.rt.lang = settings.shell.language.clone();
+        let delta = st.credit(&today, &date, has_usage_data);
+        st.feed(delta, &mut rng);
+        // Re-checks thresholds without new usage (relaunch, a Ditto reveal that failed offline).
+        if delta == 0 && st.active.is_some() {
+            st.apply_usage(0, &mut rng);
         }
-        let _ = app.emit(EV_COMPANION_EVENT, e);
+        let now = Instant::now();
+        st.expire_events(now);
+        let idle = st.effective_idle(idle_secs(snap), &date, tokens_today, has_current, now);
+        st.rt.inputs = state::Inputs { has_usage_data, today_tokens: tokens_today, tokens_per_minute: tpm, limit_warning: warning, idle_secs: idle };
+        s.save();
     }
+    hatch_flow(app, &mut rng);
+    follow_up(app); // already on the scheduler thread
+    after_change(app, false);
 }
 
-/// "Growth 42%" / "Hatch 42%" for the tray tooltip (ui-shell.md §3.1, integer floor).
+/// "Growth 42%" / "Hatch 42%" for the tray tooltip (integer floor, always the raised companion).
 pub fn menu_growth_text(app: &AppHandle, lang: &str) -> String {
     let store = app.state::<SharedStore>();
-    let s = &store.lock().unwrap().state;
-    let (credits, total, egg) = match &s.active {
-        None => (s.egg_usage, s.egg_threshold(), true),
-        Some(m) => (m.used_at_stage, m.threshold(s.difficulty()), false),
+    let (pct, egg) = store.lock().unwrap().state.growth_percent();
+    text::menu_growth(lang, pct, egg)
+}
+
+/// What the UI needs: saved state plus derived display values (companion.md §5).
+pub fn view(s: &State, settings: &crate::settings::Settings) -> Value {
+    let now = Instant::now();
+    let display = s.display_state(now);
+    let a = s.active.as_ref();
+    let faces_back = a.is_some() && (settings.pet.always_faces_back || display == state::DisplayState::Sulk);
+    let current = a.map(|a| a.current_id());
+    let rep = settings.companion.representative.filter(|id| s.owns_species(*id, settings.companion.representative_form.as_deref()));
+    let subject = match (rep, a) {
+        (Some(id), _) => {
+            let f = settings.companion.representative_form.as_deref();
+            Some(json!({ "id": id, "shiny": s.owns_shiny_species(id, f), "form": form::resolved(id, f), "back": faces_back }))
+        }
+        (None, Some(a)) => Some(json!({
+            "id": a.current_id(), "shiny": a.displays_shiny(),
+            "form": form::resolved(a.current_id(), a.form.as_deref()), "back": faces_back,
+        })),
+        (None, None) => None,
     };
-    let pct = if total > 0 { credits.min(total) * 100 / total } else { 0 };
-    let word = match (lang, egg) {
-        ("ko", true) => "부화",
-        ("ja", true) => "孵化",
-        ("es", true) => "Eclosión",
-        ("fr", true) => "Éclosion",
-        ("pt", true) => "Eclosão",
-        ("de", true) => "Schlüpfen",
-        ("ru", true) => "Вылупление",
-        (_, true) => "Hatch",
-        ("ko", false) => "성장",
-        ("ja", false) => "成長",
-        ("es", false) => "Crecimiento",
-        ("fr", false) => "Croissance",
-        ("pt", false) => "Crescimento",
-        ("de", false) => "Wachstum",
-        ("ru", false) => "Рост",
-        (_, false) => "Growth",
-    };
-    format!("{word} {pct}%")
+    let threshold = s.threshold();
+    json!({
+        "active": s.active,
+        "egg_usage": s.egg_usage,
+        "egg_threshold": s.egg_threshold(),
+        "threshold": threshold,
+        "difficulty": s.difficulty(),
+        "dex": s.dex,
+        "egg_tier": s.egg_tier,
+        "hatch_retry_delayed": s.rt.hatch_retry_delayed,
+        "display_state": display,
+        "faces_back": faces_back,
+        "just_evolved_to": s.rt.just_evolved_to,
+        "just_graduated": s.rt.just_graduated,
+        "current_id": current,
+        "current_form": a.and_then(|a| form::resolved(a.current_id(), a.form.as_deref())),
+        "displays_shiny": a.is_some_and(|a| a.displays_shiny()),
+        "current_types": current.and_then(|id| s.rt.details.get(&id)).map(|d| &d.types),
+        "is_final_stage": a.is_some_and(|a| a.is_final_stage()),
+        "growth_multiplier": a.map(|a| a.growth_multiplier()).filter(|m| *m > 1),
+        "tokens_to_next": a.zip(threshold).map_or(0, |(a, t)| t.saturating_sub(a.used_at_stage)),
+        "line_nodes": s.line_nodes().into_iter().map(|(id, st)| json!({ "id": id, "state": st })).collect::<Vec<_>>(),
+        "form_labels": s.rt.form_labels,
+        "celebration": s.rt.celebration,
+        "candy": s.rt.candy.map(|(seq, xp)| json!({ "seq": seq, "xp": xp })),
+        "mint_seq": s.rt.mint_seq,
+        "latest_event": s.rt.latest_event,
+        "representative_subject": subject,
+        "shiny_denominator": s.shiny_denominator(),
+    })
 }
 
 #[tauri::command]
-fn companion(store: tauri::State<SharedStore>) -> Value {
-    view(&store.lock().unwrap())
+fn companion(app: AppHandle) -> Value {
+    let settings = crate::settings::current(&app);
+    let store = app.state::<SharedStore>();
+    let s = store.lock().unwrap();
+    view(&s.state, &settings)
 }
 
 #[tauri::command]
 fn set_difficulty(app: AppHandle, value: f64) -> Value {
     update(&app, |s| s.set_difficulty(value));
-    view(&app.state::<SharedStore>().lock().unwrap())
+    companion(app)
 }
 
-/// Called by the shell on every settings change and once at launch (react to this area's keys here).
-pub fn on_settings(_app: &tauri::AppHandle, _s: &crate::settings::Settings) {}
+/// Default-form battle data (types, base stats, abilities, BW2 learnset), cached 30 days.
+#[tauri::command]
+async fn pokemon_details(app: AppHandle, id: u32) -> Result<profile::Details, String> {
+    if let Some(d) = app.state::<SharedStore>().lock().unwrap().state.rt.details.get(&id) {
+        return Ok(d.clone());
+    }
+    let dir = app.state::<SharedStore>().lock().unwrap().dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || pokeapi::details(&dir, id)).await.map_err(|e| e.to_string())?
+}
 
-crate::area_commands![companion, set_difficulty];
+/// `{lang: name}` of a type, ability, move or pokemon-form resource, cached 30 days.
+#[tauri::command]
+async fn pokemon_names(app: AppHandle, kind: String, name: String) -> Result<HashMap<String, String>, String> {
+    let dir = app.state::<SharedStore>().lock().unwrap().dir().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || pokeapi::names(&dir, &kind, &name)).await.map_err(|e| e.to_string())?
+}
+
+/// Called by the shell on every settings change and once at launch. Re-emits the view so the
+/// back view and representative subject follow the new settings.
+pub fn on_settings(app: &tauri::AppHandle, s: &crate::settings::Settings) {
+    let store = app.state::<SharedStore>();
+    let v = {
+        let mut st = store.lock().unwrap();
+        st.state.rt.lang = s.shell.language.clone();
+        view(&st.state, s)
+    };
+    let _ = app.emit(EV_COMPANION, v);
+}
+
+crate::area_commands![companion, set_difficulty, pokemon_details, pokemon_names];
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn node(id: u32, children: Vec<EvoNode>) -> EvoNode {
-        EvoNode { id, children }
-    }
-
-    fn bulbasaur() -> Line {
-        Line {
-            base_id: 1,
-            tree: node(1, vec![node(2, vec![node(3, vec![])])]),
-            rarity: Rarity::Common,
-            names: HashMap::new(),
-        }
-    }
+    use crate::model::{DailyUsage, ProviderSnapshot};
 
     #[test]
-    fn thresholds_sum_to_graduation_total() {
-        let sum: u64 = (0..3).map(|i| phase_threshold(Rarity::Common, 3, i)).sum();
-        assert_eq!(sum, 750_000_000);
-        assert_eq!(phase_threshold(Rarity::Common, 3, 0), 125_000_000);
-    }
-
-    #[test]
-    fn rarity_from_capture_rate() {
-        assert_eq!(Rarity::from(45, false), Rarity::Rare);
-        assert_eq!(Rarity::from(120, false), Rarity::Uncommon);
-        assert_eq!(Rarity::from(255, false), Rarity::Common);
-        assert_eq!(Rarity::from(3, true), Rarity::Legendary);
-    }
-
-    #[test]
-    fn credit_seeds_then_counts_growth() {
-        let mut s = State::default();
-        let day = |c: u64, x: u64| HashMap::from([("claude_code".into(), c), ("codex".into(), x)]);
-        assert_eq!(s.credit(&HashMap::from([("claude".into(), 100), ("codex".into(), 0)]), "d1"), 0); // old-id baseline
-        assert_eq!(s.credit(&day(150, 10), "d1"), 60);
-        assert_eq!(s.credit(&day(120, 10), "d1"), 0); // regression rebases
-        assert_eq!(s.credit(&day(130, 10), "d1"), 10);
-        assert_eq!(s.credit(&day(5, 0), "d2"), 5); // new day counts in full
-        assert_eq!(s.used_since_install, 75);
-    }
-
-    #[test]
-    fn hatch_evolve_graduate_with_overflow() {
-        let mut rng = Rng::with_seed(7);
-        let mut s = State {
-            baseline_set: true,
+    fn today_map_skips_stale_snapshots() {
+        let p = |id: &str, date: &str, total| ProviderSnapshot {
+            provider_id: id.into(),
+            today: Some(DailyUsage { date: date.into(), usage: crate::model::Usage { total, ..Default::default() }, models: None }),
             ..Default::default()
         };
-        s.feed(EGG_HATCH_THRESHOLD + 1_000, &mut rng);
-        assert!(s.ready_to_hatch());
-        let ev = s.hatch(bulbasaur(), &mut rng);
-        assert!(matches!(ev[0], Event::Hatched { id: 1, .. }));
-        assert_eq!(s.active.as_ref().unwrap().used_at_stage, 1_000);
-
-        // 125M finishes stage 0; the extra 1_000 + 250M jumps straight through stage 1 too.
-        let ev = s.feed(125_000_000 + 250_000_000, &mut rng);
-        assert_eq!(ev.len(), 2);
-        assert_eq!(s.active.as_ref().unwrap().current_id(), 3);
-        assert_eq!(s.active.as_ref().unwrap().used_at_stage, 1_000);
-
-        let ev = s.feed(375_000_000, &mut rng);
-        assert!(matches!(ev[0], Event::Graduated { id: 3 }));
-        assert!(s.active.is_none());
-        assert_eq!(s.dex[0].chain, vec![1, 2, 3]);
-        assert!(s.has_collected_base(1));
+        let snap = UsageSnapshot {
+            providers: vec![p("claude_code", "d1", 5), p("codex", "d0", 9), ProviderSnapshot { provider_id: "x".into(), ..Default::default() }],
+            fetched_at: Some("t".into()),
+            error: None,
+        };
+        assert_eq!(snap.today_by_provider("d1"), HashMap::from([("claude_code".to_string(), 5)]));
+        assert_eq!(idle_secs(&snap), Some(7 * 86400));
+        assert_eq!(idle_secs(&UsageSnapshot::default()), None);
     }
 
     #[test]
-    fn difficulty_scales_and_rescales_progress() {
-        let mut s = State { baseline_set: true, ..Default::default() };
-        assert_eq!(s.egg_threshold(), EGG_HATCH_THRESHOLD); // 0 in old saves means 1
-        s.egg_usage = 1_000_000;
-        s.set_difficulty(2.0);
-        assert_eq!((s.egg_threshold(), s.egg_usage), (10_000_000, 2_000_000));
-        s.set_difficulty(50.0); // clamped
-        assert_eq!(s.difficulty(), 2.0);
-    }
-
-    #[test]
-    fn branches_prefer_uncollected_final() {
-        let mut rng = Rng::with_seed(1);
-        let tree = node(133, vec![node(134, vec![]), node(135, vec![])]);
-        let collected = HashSet::from(["133:134".to_string()]);
-        for _ in 0..20 {
-            assert_eq!(plan(&tree, 133, &collected, &mut rng), vec![133, 135]);
-        }
-    }
-
-    #[test]
-    fn keep_animated_cuts_late_gen_evolutions() {
-        let tree = node(439, vec![node(122, vec![node(866, vec![])])]);
-        assert_eq!(
-            tree.keep_animated().unwrap(),
-            node(439, vec![node(122, vec![])])
-        );
-    }
-
-    #[test]
-    fn choose_base_halves_collected_weight() {
-        let mut rng = Rng::with_seed(3);
-        let mut s = State::default();
-        s.collected_finals.insert("1:3".into());
-        let index = [(1, 100), (4, 100)];
-        let picks = (0..3000)
-            .filter(|_| choose_base(&index, &s, &mut rng) == Some(1))
-            .count();
-        assert!((800..1200).contains(&picks), "{picks}"); // ~1/3
+    fn store_load_migrates_v02_saves() {
+        let dir = std::env::temp_dir().join(format!("ptb-companion-{}", fastrand::u64(..)));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("companion.json");
+        let v02 = r#"{"baseline_set":true,"ledger":{"claude":5},"last_date":"2026-01-01","egg_usage":10,
+            "active":{"line":{"base_id":1,"tree":{"id":1,"children":[{"id":2,"children":[]}]},"rarity":"common","names":{}},
+            "path_ids":[1],"planned_ids":[1,2],"stage_index":0,"used_at_stage":3,"is_shiny":false,"nature":"bold"},
+            "dex":[{"base_id":4,"final_id":5,"chain":[4,5],"rarity":"common","is_shiny":true,"nature":"calm","names":{},"caught_at":"x"}],
+            "collected_finals":["4:5"],"growth_difficulty":0.0,"spent_tokens":7}"#;
+        fs::write(&path, v02).unwrap();
+        let s = Store::load(path.clone()).state;
+        assert_eq!(s.growth_difficulty, 1.0);
+        let a = s.active.as_ref().unwrap();
+        assert_eq!((a.total_forms, a.used_at_stage), (2, 3));
+        assert!(a.profile.is_some() && s.dex[0].profile.is_some() && !s.dex[0].id.is_empty());
+        assert_eq!(s.economy.spent_tokens, 7);
+        assert!(dir.join("companion.pre-profiles-v1.json").exists());
+        fs::write(&path, b"not json").unwrap();
+        assert!(Store::load(path.clone()).state.active.is_none());
+        assert!(dir.join("companion.json.corrupt").exists());
+        let _ = fs::remove_dir_all(dir);
     }
 }

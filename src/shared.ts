@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, Window } from "@tauri-apps/api/window";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { LegacyDict, legacyDict, nameLang } from "./i18n";
+import { LegacyDict, legacyDict } from "./i18n";
 import type { Lang } from "./kit/i18n";
 import type { CostCoverage } from "./kit/format";
 
@@ -91,7 +91,11 @@ export type HomeSettings = {
 };
 // #endregion
 // #region companion
-export type CompanionSettings = { representative: number | null; companion_notifications: boolean };
+export type CompanionSettings = {
+  representative: number | null;
+  representative_form: string | null;
+  companion_notifications: boolean;
+};
 // #endregion
 // #region shop-bag-dex
 export type EconomySettings = { shop_difficulty: number };
@@ -115,18 +119,34 @@ export type Settings = ShellSettings &
   PetSettings;
 
 // #region companion
+import { EGG_SPRITE, spriteUrl, type SpriteOpts } from "./areas/companion/forms";
+import type { Profile } from "./areas/companion/profile";
+export type { Profile, PokemonDetails } from "./areas/companion/profile";
+export { computeStats, displayScaleMaximum } from "./areas/companion/profile";
+export { spriteChain, spriteUrl, resolvedForm, formDisplayName, formLabel, formNameResource } from "./areas/companion/forms";
+
 export type Rarity = "common" | "uncommon" | "rare" | "legendary";
 export type Names = Record<string, Record<string, string>>;
+export type EvoNode = { id: number; children: EvoNode[] };
+export type Prayers = { count: number };
 export type Mon = {
-  line: { base_id: number; rarity: Rarity; names: Names };
+  line: { base_id: number; tree: EvoNode; rarity: Rarity; names: Names };
   path_ids: number[];
   planned_ids: number[];
   stage_index: number;
   used_at_stage: number;
+  total_forms: number;
   is_shiny: boolean;
   nature: string;
+  form: string | null;
+  profile: Profile | null;
+  has_growth_boost: boolean;
+  ditto_disguise: number | null;
+  ditto_revealed: boolean;
+  prayers: Prayers | null;
 };
 export type DexEntry = {
+  id: string;
   base_id: number;
   final_id: number;
   chain: number[];
@@ -134,8 +154,17 @@ export type DexEntry = {
   is_shiny: boolean;
   nature: string;
   names: Names;
+  /** RFC 3339; the release time for released records. */
   caught_at: string;
+  form: string | null;
+  profile: Profile | null;
+  prayers: Prayers | null;
+  names_version: number | null;
+  /** Set for a Pokémon released for a new egg (not graduated). */
+  released_at: string | null;
 };
+export type DisplayState = "egg" | "idle" | "working" | "focus" | "tired" | "sleep" | "sulk" | "levelUp";
+export type RepresentativeSubject = { id: number; shiny: boolean; form: string | null; back: boolean };
 export type Companion = {
   active: Mon | null;
   egg_usage: number;
@@ -143,23 +172,61 @@ export type Companion = {
   threshold: number | null;
   difficulty: number;
   dex: DexEntry[];
+  egg_tier: Rarity | null;
+  hatch_retry_delayed: boolean;
+  display_state: DisplayState;
+  /** Back sprite on every surface: always-back setting or sulking. */
+  faces_back: boolean;
+  just_evolved_to: string | null;
+  just_graduated: string | null;
+  current_id: number | null;
+  current_form: string | null;
+  /** Shiny as shown: a disguised Ditto hides it until the reveal. */
+  displays_shiny: boolean;
+  /** Types of the current species once its details are cached. */
+  current_types: string[] | null;
+  is_final_stage: boolean;
+  growth_multiplier: number | null;
+  tokens_to_next: number;
+  line_nodes: { id: number | null; state: "done" | "current" | "future" }[];
+  /** pokemon-form id → {lang: name} */
+  form_labels: Record<string, Record<string, string>>;
+  celebration: { seq: number; kind: "hatch" | "evolve" | "ditto_reveal"; shiny: boolean } | null;
+  candy: { seq: number; xp: number } | null;
+  mint_seq: number;
+  /** Newest notification body, for the floating pet bubble. */
+  latest_event: { seq: number; text: string; at: string } | null;
+  /** What the tray and pet show: the owned representative, else the raised Pokémon; null = egg. */
+  representative_subject: RepresentativeSubject | null;
+  shiny_denominator: number;
 };
 export type CompanionEvent =
   | { kind: "hatched"; id: number; shiny: boolean }
   | { kind: "evolved"; id: number }
   | { kind: "graduated"; id: number };
 
-const SPRITES = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon";
-export const sprite = (id: number, shiny = false) =>
-  `${SPRITES}/versions/generation-v/black-white/animated/${shiny ? "shiny/" : ""}${id}.gif`;
-export const EGG = `${SPRITES}/egg.png`;
+/** Sprite URL: animated GIF up to #649 (static PNG above), form-aware, optional back view. */
+export const sprite = (id: number, shiny = false, opts: Omit<SpriteOpts, "shiny"> = {}) => spriteUrl(id, { ...opts, shiny });
+export const EGG = EGG_SPRITE;
 
-export function nameOf(names: Names, id: number, lang: Lang) {
-  const n = names[id] ?? {};
-  return n[nameLang(lang)] ?? n.en ?? `#${id}`;
+const API_CODES: Record<Lang, string[]> = {
+  ko: ["ko"], en: ["en"], ja: ["ja-hrkt", "ja"], es: ["es"], fr: ["fr"], pt: ["pt-br", "pt"], de: ["de"], ru: ["ru"],
+};
+
+/** Localized name from a `{lang: name}` map: app language codes, then en. */
+export function resolveName(n: Record<string, string> | undefined, lang: Lang): string | null {
+  if (!n) return null;
+  const norm: Record<string, string> = {};
+  for (const [k, v] of Object.entries(n)) if (v.trim()) norm[k.trim().toLowerCase().replace(/_/g, "-")] = v.trim();
+  for (const c of [...API_CODES[lang], "en"]) if (norm[c]) return norm[c];
+  return null;
 }
 
-/** Species the user owns: every graduated chain plus the stages the active Pokémon has reached. */
+export function nameOf(names: Names, id: number, lang: Lang) {
+  return resolveName(names[id], lang) ?? `#${id}`;
+}
+
+/** Species the user owns: every dex chain plus the stages the active Pokémon has reached. */
 export type OwnedSpecies = {
   id: number;
   names: Names;
@@ -180,16 +247,20 @@ export function ownedSpecies(c: Companion): Map<number, OwnedSpecies> {
   };
   c.dex.forEach((d) => d.chain.forEach((id) => add(id, d.names, d.rarity, d.is_shiny, false)));
   const a = c.active;
-  a?.path_ids.slice(0, a.stage_index + 1).forEach((id) => add(id, a.line.names, a.line.rarity, a.is_shiny, true));
+  // displays_shiny: a disguised Ditto must not reveal its shiny early.
+  a?.path_ids.slice(0, a.stage_index + 1).forEach((id) => add(id, a.line.names, a.line.rarity, c.displays_shiny, true));
   return out;
 }
 
-/** What the pet and tray show: the chosen representative if still owned, else the active Pokémon. */
-export function displayed(c: Companion, s: Settings | null): { id: number; shiny: boolean; names: Names } | null {
-  const rep = s?.representative != null ? ownedSpecies(c).get(s.representative) : undefined;
-  if (rep) return { id: rep.id, shiny: rep.shiny, names: rep.names };
-  const a = c.active;
-  return a ? { id: a.path_ids[a.stage_index], shiny: a.is_shiny, names: a.line.names } : null;
+/** What the pet and tray show (Rust resolves ownership, shiny, form and back view). */
+export function displayed(
+  c: Companion,
+  _s?: Settings | null,
+): { id: number; shiny: boolean; names: Names; form: string | null; back: boolean } | null {
+  const r = c.representative_subject;
+  if (!r) return null;
+  const names = ownedSpecies(c).get(r.id)?.names ?? {};
+  return { ...r, names };
 }
 // #endregion
 

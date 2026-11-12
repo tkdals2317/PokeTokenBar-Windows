@@ -159,14 +159,12 @@ impl UsageSnapshot {
         (cost, cov)
     }
 
-    /// Today's tokens per provider id, for companion crediting.
+    /// Today's tokens per provider id, for companion crediting. Only providers whose snapshot is
+    /// dated `day`: a stale or missing one must not move the ledger (companion.md §3.11).
     pub fn today_by_provider(&self, day: &str) -> HashMap<String, u64> {
         self.providers
             .iter()
-            .map(|p| {
-                let t = p.today.as_ref().filter(|t| t.date == day).map_or(0, |t| t.usage.total);
-                (p.provider_id.clone(), t)
-            })
+            .filter_map(|p| p.today.as_ref().filter(|t| t.date == day).map(|t| (p.provider_id.clone(), t.usage.total)))
             .collect()
     }
 
