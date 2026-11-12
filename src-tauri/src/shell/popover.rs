@@ -24,6 +24,9 @@ pub struct PopoverState {
     /// The user dragged the popover somewhere: keep it there (until the app quits) instead of
     /// re-anchoring it to the tray icon on every open / Settings switch.
     moved: bool,
+    /// Settings is showing: it behaves like a normal window (stays open when the user clicks
+    /// elsewhere, no longer always on top) instead of a dismiss-on-blur popover.
+    settings: bool,
 }
 
 /// The webview is about to start a window drag.
@@ -82,7 +85,14 @@ fn icon_rect(app: &AppHandle, scale: f64) -> Option<Rect> {
 fn place(app: &AppHandle, w: &WebviewWindow, settings: bool) {
     let height = if settings { SETTINGS_HEIGHT } else { HEIGHT };
     let _ = w.set_size(LogicalSize::new(WIDTH, height));
-    if app.state::<Mutex<PopoverState>>().lock().unwrap().moved {
+    let _ = w.set_always_on_top(!settings);
+    let state = app.state::<Mutex<PopoverState>>();
+    let moved = {
+        let mut st = state.lock().unwrap();
+        st.settings = settings;
+        st.moved
+    };
+    if moved {
         // Stay where the user left it, only pulled back if the new size would cross the edge.
         if let (Ok(pos), Ok(Some(monitor))) = (w.outer_position(), w.current_monitor()) {
             let wa = monitor.work_area();
@@ -163,6 +173,9 @@ pub fn on_blur(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(BLUR_DEBOUNCE);
+        if app.state::<Mutex<PopoverState>>().lock().unwrap().settings {
+            return; // Settings stays open until Back / the tray icon / the window is closed.
+        }
         if window(&app).is_some_and(|w| on_screen(&w) && !w.is_focused().unwrap_or(false)) {
             hide(&app);
         }
