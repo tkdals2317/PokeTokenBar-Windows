@@ -162,9 +162,10 @@ impl Default for Rarity {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Event {
-    Hatched { id: u32, shiny: bool },
-    Evolved { id: u32 },
-    Graduated { id: u32 },
+    // `text`: the localized event line, so the pet need not resolve names from a view it may not have yet.
+    Hatched { id: u32, shiny: bool, text: String },
+    Evolved { id: u32, text: String },
+    Graduated { id: u32, text: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -498,8 +499,9 @@ impl State {
             self.celebrate(CelebrationKind::Evolve, false);
             self.open_event_window(4);
             let lang = self.rt.lang.clone();
-            self.notify(text::evolve_title(&lang), text::evolve_body(&lang, &old, &new));
-            self.rt.events.push(Event::Evolved { id: next });
+            let body = text::evolve_body(&lang, &old, &new);
+            self.notify(text::evolve_title(&lang), body.clone());
+            self.rt.events.push(Event::Evolved { id: next, text: body });
         }
         self.reconcile_profile_growth();
     }
@@ -519,9 +521,10 @@ impl State {
         let name = self.form_name(final_id, a.form.as_deref()); // resolves from the entry just saved
         self.rt.just_graduated = Some(name.clone());
         let lang = self.rt.lang.clone();
-        self.notify(text::graduate_title(&lang), text::graduate_body(&lang, &name));
+        let body = text::graduate_body(&lang, &name);
+        self.notify(text::graduate_title(&lang), body.clone());
         self.open_event_window(6);
-        self.rt.events.push(Event::Graduated { id: final_id });
+        self.rt.events.push(Event::Graduated { id: final_id, text: body });
         self.egg_usage = 0;
         self.egg_prayers = None;
         self.rt.hatch_retry_delayed = false;
@@ -648,7 +651,7 @@ impl State {
             None => text::hatch_body(&lang, &name),
         };
         self.notify(text::hatch_title(&lang, show_shiny), body);
-        self.rt.events.push(Event::Hatched { id: base, shiny: show_shiny });
+        self.rt.events.push(Event::Hatched { id: base, shiny: show_shiny, text: text::hatch_body(&lang, &name) });
         self.rt.just_evolved_to = None;
         self.open_event_window(4);
         if overflow > 0 {

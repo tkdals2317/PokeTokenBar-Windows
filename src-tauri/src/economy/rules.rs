@@ -463,7 +463,9 @@ mod tests {
         assert_eq!(candy_stage_costs(&s), vec![250_000_000, 500_000_000]);
         assert_eq!(max_candy_use(&s), 8); // ceil(740M / 100M)
         let mut rng = Rng::with_seed(1);
+        let wallet = available(&s);
         assert_eq!(use_candy(&mut s, 3, &mut rng), Some("evolved"));
+        assert_eq!(available(&s), wallet, "candy XP never touches used_since_install or spent");
         assert_eq!((count(&s, Item::RareCandy), s.active.as_ref().unwrap().used_at_stage), (17, 60_000_000));
         assert_eq!(use_candy(&mut s, 99, &mut rng), Some("graduated"));
         assert_eq!(count(&s, Item::RareCandy), 12); // only 5 needed

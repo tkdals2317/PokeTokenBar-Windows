@@ -108,7 +108,7 @@ fn record(l: &mut DailyLedger, snap: &UsageSnapshot, today: NaiveDate) -> bool {
 }
 
 pub fn setup(app: &tauri::App) -> tauri::Result<()> {
-    let path = app.path().app_data_dir()?.join(FILE);
+    let path = crate::pet::state_dir(app)?.join(FILE); // honours PTB_STATE_DIR like companion.json
     let data = sanitized(load_json(&path));
     app.manage(Ledger { path, data: Mutex::new(data) });
     Ok(())

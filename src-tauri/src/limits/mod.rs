@@ -347,7 +347,7 @@ type WorkState = Mutex<Work>;
 type SharedState = Mutex<Shared>;
 
 pub fn setup(app: &tauri::App) -> tauri::Result<()> {
-    let dir = app.path().app_data_dir()?;
+    let dir = crate::pet::state_dir(app)?; // PTB_STATE_DIR like every other state file
     let persisted = crate::store::load_json(&dir.join("limits-state.json"));
     app.manage::<WorkState>(Mutex::new(Work {
         dir,

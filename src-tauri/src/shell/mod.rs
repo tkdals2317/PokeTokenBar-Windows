@@ -11,7 +11,7 @@ use crate::settings::Settings;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Emitter, Listener, Manager, WebviewWindow, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 
 pub const TRAY_ID: &str = "main";
@@ -68,7 +68,6 @@ fn refresh_usage(app: &AppHandle) {
     crate::companion::on_usage(app, &snap);
     crate::home::on_usage(app, &snap);
     let _ = app.emit(EV_USAGE, &snap);
-    tray::update(app); // growth % moved
 }
 
 fn refresh_limits(app: &AppHandle) {
@@ -128,6 +127,9 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
     app.manage(Mutex::new(popover::PopoverState::default()));
     settings_hooks(app.handle(), &crate::settings::current(app.handle()));
     tray::create(app)?;
+    // Growth % also moves outside refreshes (Rare Candy, egg purchase, hatch follow-ups).
+    let h = app.handle().clone();
+    app.listen(crate::model::EV_COMPANION, move |_| tray::update(&h));
     crate::pet::start_tray_sprite(app.handle());
     let handle = app.handle().clone();
     std::thread::spawn(move || scheduler(handle));

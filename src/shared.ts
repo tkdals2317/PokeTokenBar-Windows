@@ -201,9 +201,9 @@ export type Companion = {
   shiny_denominator: number;
 };
 export type CompanionEvent =
-  | { kind: "hatched"; id: number; shiny: boolean }
-  | { kind: "evolved"; id: number }
-  | { kind: "graduated"; id: number };
+  | { kind: "hatched"; id: number; shiny: boolean; text: string }
+  | { kind: "evolved"; id: number; text: string }
+  | { kind: "graduated"; id: number; text: string };
 
 /** Sprite URL: animated GIF up to #649 (static PNG above), form-aware, optional back view. */
 export const sprite = (id: number, shiny = false, opts: Omit<SpriteOpts, "shiny"> = {}) => spriteUrl(id, { ...opts, shiny });

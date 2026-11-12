@@ -278,7 +278,6 @@ function FloatingPet() {
   const timers = useRef<Record<string, number>>({});
   const press = useRef<{ x: number; y: number } | null>(null);
   const detector = useRef(new PettingDetector(10));
-  const stageIds = useRef<{ last: number | null; before: number | null }>({ last: null, before: null });
   const lang = settings?.language ?? "en";
   const l = pick(petStrings, lang);
 
@@ -310,29 +309,17 @@ function FloatingPet() {
   const name = shown ? nameOf(shown.names, shown.id, lang) : "🥚";
   detector.current.minDistance = strokeDistance(size);
 
-  // Track stage ids so an `evolved` event can name the old form.
-  const activeId = companion?.active ? companion.active.path_ids[companion.active.stage_index] : null;
-  if (activeId !== stageIds.current.last) stageIds.current = { last: activeId, before: stageIds.current.last };
-
   useEffect(() => {
-    const sub = listen<CompanionEvent & { text?: string }>("companion-event", (e) => {
-      if (!companion || showingBubble) return; // not queued: an event that cannot pop is dropped
-      const p = e.payload;
-      const names = companion.active?.line.names ?? companion.dex[companion.dex.length - 1]?.names ?? {};
-      const n = (id: number) => nameOf(names, id, lang);
-      const ids = stageIds.current;
-      const text =
-        p.text ??
-        (p.kind === "hatched" ? l.notifHatchBody(n(p.id))
-        : p.kind === "evolved" ? l.notifEvolveBody(n(ids.last === p.id ? (ids.before ?? p.id) : (ids.last ?? p.id)), n(p.id))
-        : l.notifGraduateBody(n(p.id)));
-      setEventLine(text);
+    // The line comes localized from Rust: this closure's `companion` can predate the hatch.
+    const sub = listen<CompanionEvent>("companion-event", (e) => {
+      if (showingBubble) return; // not queued: an event that cannot pop is dropped
+      setEventLine(e.payload.text);
       restart("event", EVENT_POP, () => setEventLine(null));
     });
     return () => {
       sub.then((f) => f());
     };
-  }, [companion, showingBubble, lang, l]);
+  }, [showingBubble]);
 
   // The panel grows upward while a bubble or hearts show (Rust keeps the pet in place).
   useEffect(() => {
