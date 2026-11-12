@@ -3,7 +3,6 @@
 //! rollout-log fallback), Antigravity, Cursor, OpenCode Go, Grok, plus the statuspage banner.
 //! Each source keeps its last good value on failure; alerts are edge-triggered per window.
 
-mod antigravity;
 mod claude;
 mod codex;
 mod cursor;
@@ -74,7 +73,7 @@ pub struct ClaudeAccount {
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct ProviderLimits {
-    /// claude_code | codex | antigravity | cursor | opencode | grok
+    /// claude_code | codex | cursor | opencode | grok
     pub provider: String,
     /// Claude only.
     pub account: Option<ClaudeAccount>,
@@ -244,17 +243,6 @@ fn codex_window(minutes: Option<&str>, lang: &str) -> String {
     }
 }
 
-fn agy_group_title(raw: &str, lang: &str) -> String {
-    let l = raw.to_lowercase();
-    if l.contains("gemini") {
-        tr(&strings::ANTIGRAVITY_GEMINI_GROUP, lang).into()
-    } else if l.contains("claude") || l.contains("gpt") || l.contains("3p") {
-        tr(&strings::ANTIGRAVITY_THIRD_PARTY_GROUP, lang).into()
-    } else {
-        raw.into()
-    }
-}
-
 /// Generic row name (popover labels), used for alert names.
 fn row_name(w: &Window, lang: &str) -> String {
     match w.label.as_str() {
@@ -327,7 +315,6 @@ struct Work {
     sources: HashMap<&'static str, Src>,
     statuses: Vec<ProviderStatus>,
     oauth: claude::OAuthCache,
-    agy: Option<antigravity::Credential>,
     cursor: cursor::Cache,
     /// window key → tier already notified (in memory: the first poll after launch re-alerts).
     alerts: HashMap<String, u8>,
@@ -355,7 +342,6 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
         sources: HashMap::new(),
         statuses: vec![],
         oauth: Default::default(),
-        agy: None,
         cursor: Default::default(),
         alerts: HashMap::new(),
         orgs: HashMap::new(),
@@ -563,7 +549,7 @@ fn apply(w: &mut Work, id: &'static str, on: bool, now: DateTime<Utc>, fetch: im
     }
 }
 
-fn refresh_sources(w: &mut Work, s: &crate::settings::Settings, manual: bool, now: DateTime<Utc>) {
+fn refresh_sources(w: &mut Work, s: &crate::settings::Settings, now: DateTime<Utc>) {
     let custom_cursor = s.providers.custom_scan_roots.get("cursor").cloned();
     apply(w, "codex", enabled(s, "codex"), now, |w| {
         let prev_none = w.sources.get("codex").is_none_or(|s| s.value.is_none());
@@ -580,11 +566,6 @@ fn refresh_sources(w: &mut Work, s: &crate::settings::Settings, manual: bool, no
                 ..ProviderLimits::new("codex")
             })
         })
-    });
-    apply(w, "antigravity", enabled(s, "antigravity"), now, |w| {
-        let dir = w.dir.clone();
-        antigravity::fetch(&dir, manual, &mut w.agy)
-            .map(|o| o.map(|windows| ProviderLimits { windows, ..ProviderLimits::new("antigravity") }))
     });
     apply(w, "cursor", enabled(s, "cursor"), now, |w| {
         cursor::fetch(custom_cursor.as_deref(), &mut w.cursor).map(|o| {
@@ -610,7 +591,7 @@ fn build(w: &Work, s: &crate::settings::Settings) -> Vec<ProviderLimits> {
     if out.is_empty() && enabled(s, "claude_code") {
         out.push(ProviderLimits::new("claude_code")); // the tab still offers "Load official limits"
     }
-    for id in ["codex", "antigravity", "cursor", "opencode", "grok"] {
+    for id in ["codex", "cursor", "opencode", "grok"] {
         if !enabled(s, id) {
             continue;
         }
@@ -621,8 +602,9 @@ fn build(w: &Work, s: &crate::settings::Settings) -> Vec<ProviderLimits> {
             p.auth_expired = src.auth_expired.then(|| "token".into());
             p.error = src.error.as_ref().map(LimitError::code);
         }
-        // Antigravity always has a section (refresh row); the others only with values or a banner.
-        if id == "antigravity" || !p.windows.is_empty() || p.auth_expired.is_some() {
+        // Only with values or a banner. (Antigravity limits are not ported: its token refresh needs an
+        // OAuth client secret we will not ship. Antigravity usage still comes from local logs.)
+        if !p.windows.is_empty() || p.auth_expired.is_some() {
             out.push(p);
         }
     }
@@ -676,11 +658,6 @@ fn alert_windows(limits: &[ProviderLimits], lang: &str) -> Vec<(String, String, 
                 }
                 "codex" if w.label == "personal" => (format!("codex.{}", w.key), row_name(w, lang), None),
                 "codex" => (format!("codex.{}", w.key), format!("{} {}", w.group.clone().unwrap_or_default(), row_name(w, lang)), None),
-                "antigravity" => (
-                    format!("antigravity.{}", w.key),
-                    format!("{} {}", agy_group_title(w.group.as_deref().unwrap_or(""), lang), row_name(w, lang)),
-                    None,
-                ),
                 _ => continue, // Cursor, OpenCode and Grok do not alert.
             };
             out.push((key, name, w.used_percent, account));
@@ -741,7 +718,7 @@ fn run(app: &AppHandle, manual: bool) -> Vec<ProviderLimits> {
     } else {
         w.claude.clear();
     }
-    refresh_sources(&mut w, &s, manual, now);
+    refresh_sources(&mut w, &s, now);
     if s.limits.status_checks_enabled {
         for fresh in status::fetch() {
             w.statuses.retain(|o| o.provider != fresh.provider);
@@ -865,7 +842,7 @@ pub fn is_limit_warning(app: &AppHandle) -> bool {
     let crit = s.limits.crit_threshold;
     let hot = |p: &ProviderLimits| p.windows.iter().any(|w| !w.expired && w.used_percent >= crit);
     tracked(&limits).is_some_and(hot)
-        || limits.iter().filter(|p| p.provider == "codex" || p.provider == "antigravity").any(hot)
+        || limits.iter().filter(|p| p.provider == "codex").any(hot)
         || forecast(app, &limits, Utc::now()).is_some_and(|(_, before)| before)
 }
 
@@ -879,7 +856,7 @@ pub fn highest_limit_utilization(app: &AppHandle) -> Option<f64> {
     if today.contains("claude_code") {
         all.extend(tracked(&limits).into_iter().flat_map(utilizations));
     }
-    for p in limits.iter().filter(|p| (p.provider == "codex" || p.provider == "antigravity") && today.contains(&p.provider)) {
+    for p in limits.iter().filter(|p| (p.provider == "codex") && today.contains(&p.provider)) {
         all.extend(p.windows.iter().filter(|w| w.label != "personal").map(|w| w.used_percent));
     }
     all.into_iter().reduce(f64::max)
@@ -930,22 +907,6 @@ fn candy_windows_of(limits: &[ProviderLimits], lang: &str, armed: &BTreeSet<Stri
                     });
                 }
             }
-            "antigravity" => {
-                for w in &p.windows {
-                    let g = w.group.as_deref().unwrap_or("");
-                    let gk = antigravity::group_key(g);
-                    let (slot, kind) = match w.label.as_str() {
-                        "fiveHour" => ("5h", "session"),
-                        "weekly" => ("weekly", "weekly"),
-                        _ => continue,
-                    };
-                    let key = format!("antigravity.{gk}.{slot}");
-                    if out.iter().any(|c: &CandyWindow| c.key == key) {
-                        continue; // first bucket of its kind per group
-                    }
-                    out.push(CandyWindow { key, name: format!("{} {}", agy_group_title(g, lang), row_name(w, lang)), kind, utilization: w.used_percent, epoch: w.resets_at.clone() });
-                }
-            }
             _ => {}
         }
     }
@@ -989,9 +950,6 @@ fn menu_parts(limits: &[ProviderLimits], today: &std::collections::HashSet<Strin
     let max = |p: &ProviderLimits, f: &dyn Fn(&Window) -> bool| p.windows.iter().filter(|w| f(w)).map(|w| w.used_percent).reduce(f64::max);
     if let Some(u) = find("codex").and_then(|p| max(p, &|w| w.key.ends_with(".primary"))) {
         add("Codex", u);
-    }
-    if let Some(u) = find("antigravity").and_then(|p| max(p, &|w| w.label == "fiveHour")) {
-        add("AGY", u);
     }
     if let Some(u) = find("cursor").and_then(|p| max(p, &|w| w.key == "included")) {
         add("Cursor", u);
@@ -1179,8 +1137,6 @@ mod tests {
 
     #[test]
     fn alert_names_and_keys() {
-        let mut agy = ProviderLimits::new("antigravity");
-        agy.windows = vec![Window { group: Some("Gemini Models".into()), ..win("gemini.g-5h", "fiveHour", 1.0) }];
         let mut codex = ProviderLimits::new("codex");
         codex.windows = vec![
             Window { group: Some("Codex".into()), arg: Some("300".into()), ..win("codex.primary", "codex", 1.0) },
@@ -1192,7 +1148,6 @@ mod tests {
             claude("default", vec![win("5h", "fiveHour", 1.0), Window { arg: Some("Opus".into()), ..win("scoped.weekly_scoped.Opus.0", "scoped", 1.0) }]),
             claude("ab12cd34", vec![win("7d-sonnet", "weeklySonnet", 1.0)]),
             codex,
-            agy,
             grok,
         ];
         let got: Vec<_> = alert_windows(&all, "en").into_iter().map(|(k, n, _, a)| (k, n, a)).collect();
@@ -1202,7 +1157,6 @@ mod tests {
             ("claude.ab12cd34.sevenDaySonnet", "Claude Weekly Sonnet", Some("ab12cd34@x.com")),
             ("codex.codex.primary", "Codex 5-hour session", None),
             ("codex.codex.individual", "Codex personal limit", None),
-            ("antigravity.gemini.g-5h", "Gemini Models 5-hour session", None),
         ];
         let want: Vec<_> = want.iter().map(|(k, n, a)| (k.to_string(), n.to_string(), a.map(String::from))).collect();
         assert_eq!(got, want);
@@ -1264,23 +1218,17 @@ mod tests {
             Window { group: Some("Codex".into()), arg: Some("10080".into()), expired: true, ..win("codex.secondary", "codex", 0.0) },
             win("codex.individual", "personal", 100.0),
         ];
-        let mut agy = ProviderLimits::new("antigravity");
-        agy.windows = vec![
-            Window { group: Some("Claude and GPT".into()), ..win("3p.a-5h", "fiveHour", 1.0) },
-            Window { group: Some("Claude and GPT".into()), ..win("3p.b-5h", "fiveHour", 2.0) },
-        ];
         let all = [
             claude("default", vec![win("5h", "fiveHour", 100.0), win("7d-opus", "weeklyOpus", 100.0)]),
             claude("ab12cd34", vec![win("5h", "fiveHour", 100.0)]),
             codex,
-            agy,
         ];
         let got = candy_windows_of(&all, "en", &BTreeSet::new());
         let keys: Vec<_> = got.iter().map(|c| (c.key.as_str(), c.kind, c.epoch.is_none())).collect();
-        assert_eq!(keys, [("claude.fiveHour", "session", true), ("codex.codex.primary", "session", true), ("antigravity.3p.5h", "session", true)]);
+        assert_eq!(keys, [("claude.fiveHour", "session", true), ("codex.codex.primary", "session", true)]);
         assert_eq!(got[0].name, "Claude 5-hour session (default@x.com)");
         let armed: BTreeSet<String> = ["claude.ab12cd34.fiveHour".to_string()].into();
-        assert_eq!(candy_windows_of(&all, "en", &armed).len(), 4);
+        assert_eq!(candy_windows_of(&all, "en", &armed).len(), 3);
     }
 
     #[test]

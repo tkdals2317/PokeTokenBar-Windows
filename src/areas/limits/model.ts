@@ -108,13 +108,6 @@ export function rowName(w: LimitWindow, t: LimitsText): string {
   }
 }
 
-export function agyGroupTitle(raw: string, t: LimitsText): string {
-  const l = raw.toLowerCase();
-  if (l.includes("gemini")) return t.antigravityGeminiGroup;
-  if (l.includes("claude") || l.includes("gpt") || l.includes("3p")) return t.antigravityThirdPartyGroup;
-  return raw;
-}
-
 /** `friendlyLimitError`: Rust error code → sentence. */
 export function friendlyError(code: string | null, t: LimitsText): string | null {
   if (!code) return null;
@@ -140,7 +133,6 @@ export function sectionEntries(all: ProviderLimits[], provider: string): Provide
   const mine = all.filter((p) => p.provider === provider);
   switch (provider) {
     case "claude_code":
-    case "antigravity":
       return mine;
     case "codex":
       return mine.filter((p) => p.windows.length > 0);

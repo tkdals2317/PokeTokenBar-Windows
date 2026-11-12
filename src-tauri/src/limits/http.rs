@@ -94,14 +94,12 @@ pub fn agent(timeout_secs: u64) -> ureq::Agent {
 pub enum Body<'a> {
     Empty,
     Json(&'a Value),
-    Form(&'a [(&'a str, &'a str)]),
 }
 
 pub fn send(req: ureq::Request, body: Body) -> Result<Resp> {
     let res = match body {
         Body::Empty => req.call(),
         Body::Json(v) => req.send_json(v.clone()),
-        Body::Form(f) => req.send_form(f),
     };
     let r = match res {
         Ok(r) => r,

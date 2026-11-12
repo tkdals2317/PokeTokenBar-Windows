@@ -67,10 +67,9 @@ const p = (provider: string, o: Partial<ProviderLimits> = {}): ProviderLimits =>
   provider, account: null, windows: [], error: null, updated_at: null, auth_expired: null, plan: null,
   account_label: null, limit_reached: false, message: null, remaining_usd: null, products: [], ...o,
 });
-const all = [p("claude_code"), p("codex"), p("antigravity"), p("grok", { auth_expired: "token" }), p("cursor")];
+const all = [p("claude_code"), p("codex"), p("grok", { auth_expired: "token" }), p("cursor")];
 assert.equal(sectionEntries(all, "claude_code").length, 1);
 assert.equal(sectionEntries(all, "codex").length, 0);
-assert.equal(sectionEntries(all, "antigravity").length, 1);
 assert.equal(sectionEntries(all, "grok").length, 1);
 assert.equal(sectionEntries(all, "cursor").length, 0);
 

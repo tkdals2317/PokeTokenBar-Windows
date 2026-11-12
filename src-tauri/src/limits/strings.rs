@@ -99,26 +99,6 @@ pub const CODEX_PERSONAL_LIMIT: [&str; 8] = [
     "Persönliches Codex-Limit",
     "Личный лимит Codex",
 ];
-pub const ANTIGRAVITY_GEMINI_GROUP: [&str; 8] = [
-    "Gemini 모델군",
-    "Gemini Models",
-    "Gemini モデル群",
-    "Modelos Gemini",
-    "Modèles Gemini",
-    "Modelos Gemini",
-    "Gemini-Modelle",
-    "Модели Gemini",
-];
-pub const ANTIGRAVITY_THIRD_PARTY_GROUP: [&str; 8] = [
-    "Claude & GPT 모델군",
-    "Claude & GPT Models",
-    "Claude & GPT モデル群",
-    "Modelos Claude y GPT",
-    "Modèles Claude et GPT",
-    "Modelos Claude e GPT",
-    "Claude- & GPT-Modelle",
-    "Модели Claude и GPT",
-];
 pub const TRACKED_ACCOUNT_TOOL_TIP: [&str; 8] = [
     "추적할 Claude 계정: {}",
     "Tracked Claude account: {}",

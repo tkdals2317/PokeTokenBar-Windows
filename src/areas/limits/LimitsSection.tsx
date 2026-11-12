@@ -10,7 +10,7 @@ import {
   getClaudeAccount, openSessionKeySettings, setClaudeAccount, useLimitsExtras, useManualRefresh, useNow,
 } from "./hooks";
 import {
-  agyGroupTitle, DisplayMode, forecast, friendlyError, isStale, LimitsText, paceHelp, percentText, resetLabel,
+  DisplayMode, forecast, friendlyError, isStale, LimitsText, paceHelp, percentText, resetLabel,
   rowLook, rowName, sectionEntries, windowPace, windowReset,
 } from "./model";
 import { limitsStrings } from "./strings";
@@ -254,34 +254,6 @@ function CodexContent({ c, p }: { c: Ctx; p: ProviderLimits }) {
   );
 }
 
-function AntigravityContent({ c, p, refresh }: { c: Ctx; p: ProviderLimits; refresh: ReturnType<typeof useManualRefresh> }) {
-  const groups: string[] = [];
-  for (const w of p.windows) if (!groups.includes(w.group ?? "")) groups.push(w.group ?? "");
-  const stale = isStale(p.updated_at, c.now);
-  return (
-    <>
-      {p.auth_expired ? (
-        <ExpiredBox title={c.t.antigravityAuthExpiredTitle} hint={c.t.antigravityAuthExpiredHint}
-          retry={<div className="lim-retry"><SmallButton label={c.t.retry} prominent busy={refresh.busy} onClick={refresh.run} /></div>} />
-      ) : (
-        (p.windows.length === 0 || stale) && <RefreshRow c={c} staleAt={p.windows.length > 0 ? p.updated_at : null} refresh={refresh} />
-      )}
-      {p.windows.length > 0 && (
-        <div className="lim-groups" style={{ opacity: p.auth_expired ? 0.5 : 1 }}>
-          {groups.map((g) => (
-            <div key={g} className="lim-group">
-              <div className="lim-group-title">{agyGroupTitle(g, c.t)}</div>
-              {p.windows.filter((w) => (w.group ?? "") === g).map((w) => (
-                <QuotaRow key={w.key} c={c} w={w} name={rowName(w, c.t)} />
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
 function SimpleContent({ c, p }: { c: Ctx; p: ProviderLimits }) {
   const t = c.t;
   const expired = p.auth_expired != null;
@@ -360,7 +332,6 @@ export default function LimitsSection(props: TabProps & { providerId?: string })
             </div>
             {provider === "claude_code" && <ClaudeContent c={c} entries={entries} props={props} refresh={refresh} />}
             {provider === "codex" && <CodexContent c={c} p={entries[0]} />}
-            {provider === "antigravity" && <AntigravityContent c={c} p={entries[0]} refresh={refresh} />}
             {["cursor", "opencode", "grok"].includes(provider) && <SimpleContent c={c} p={entries[0]} />}
           </section>
           <hr className="divider" />
