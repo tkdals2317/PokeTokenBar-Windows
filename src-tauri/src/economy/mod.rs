@@ -41,4 +41,7 @@ pub fn setup(_app: &tauri::App) -> tauri::Result<()> {
 /// Called by the shell after every limits refresh (free Rare Candy grants, shop-bag-dex.md §3.6).
 pub fn on_limits(_app: &tauri::AppHandle, _limits: &[crate::limits::ProviderLimits]) {}
 
+/// Called by the shell on every settings change and once at launch (react to this area's keys here).
+pub fn on_settings(_app: &tauri::AppHandle, _s: &crate::settings::Settings) {}
+
 crate::area_commands![];

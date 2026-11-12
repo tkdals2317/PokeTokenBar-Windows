@@ -283,6 +283,9 @@ fn limits(app: tauri::AppHandle) -> Vec<ProviderLimits> {
     current(&app)
 }
 
+/// Called by the shell on every settings change and once at launch (react to this area's keys here).
+pub fn on_settings(_app: &tauri::AppHandle, _s: &crate::settings::Settings) {}
+
 crate::area_commands![limits];
 
 #[cfg(test)]

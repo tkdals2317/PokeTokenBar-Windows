@@ -608,6 +608,9 @@ fn set_difficulty(app: AppHandle, value: f64) -> Value {
     view(&app.state::<SharedStore>().lock().unwrap())
 }
 
+/// Called by the shell on every settings change and once at launch (react to this area's keys here).
+pub fn on_settings(_app: &tauri::AppHandle, _s: &crate::settings::Settings) {}
+
 crate::area_commands![companion, set_difficulty];
 
 #[cfg(test)]

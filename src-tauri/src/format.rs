@@ -68,15 +68,22 @@ mod tests {
     #[test]
     fn compact_matches_token_formatter() {
         let cases = [
+            (0, "0"),
+            (999, "999"),
+            (-999, "-999"),
             (987, "987"),
             (12_345, "12.3K"),
             (1_000, "1K"),
             (999_949, "999.9K"),
             (999_950, "1M"),
+            (1_050_000, "1.1M"),
             (190_612_940, "190.6M"),
+            (999_949_999, "999.9M"),
+            (999_950_000, "1B"),
             (1_240_000_000, "1.24B"),
             (2_000_000_000, "2B"),
             (-12_345, "-12.3K"),
+            (-999_950, "-1M"),
         ];
         for (v, want) in cases {
             assert_eq!(compact(v), want, "{v}");
@@ -85,13 +92,17 @@ mod tests {
 
     #[test]
     fn percent_and_costs() {
-        assert_eq!([percent(79.96), percent(88.35), percent(80.0)], ["80%", "88.3%", "80%"]);
         assert_eq!(
-            [cost_compact(9.5), cost_compact(99.96), cost_compact(311.0), cost_compact(12_345.0)],
-            ["$9.5", "$100", "$311", "$12.3K"]
+            [percent(79.96), percent(88.35), percent(80.0), percent(0.0), percent(100.0)],
+            ["80%", "88.3%", "80%", "0%", "100%"]
         );
+        let compact_costs = [0.0, 9.5, 99.94, 99.96, 311.0, 9_999.4, 9_999.6, 12_345.0].map(cost_compact);
+        assert_eq!(compact_costs, ["$0.0", "$9.5", "$99.9", "$100", "$311", "$9999", "$10.0K", "$12.3K"]);
         let unknown = CostCoverage { unknown: true, ..Default::default() };
         assert_eq!(cost_text(1.0, unknown, true, "Unavailable"), "$—");
+        assert_eq!(cost_text(1.0, unknown, false, "Unavailable"), "Unavailable");
+        let partial = CostCoverage { unknown: true, estimated: true, ..Default::default() };
+        assert_eq!(cost_text(1.5, partial, true, "Unavailable"), "$1.5");
         assert_eq!(cost_text(2.756, CostCoverage::default(), false, ""), "$2.76");
     }
 }

@@ -43,10 +43,20 @@ pub fn popover_visible(app: &AppHandle) -> bool {
     popover::visible(app)
 }
 
+/// Every area's `on_settings` hook, in setup order.
+fn settings_hooks(app: &AppHandle, s: &Settings) {
+    crate::providers::on_settings(app, s);
+    crate::limits::on_settings(app, s);
+    crate::companion::on_settings(app, s);
+    crate::home::on_settings(app, s);
+    crate::economy::on_settings(app, s);
+    crate::pet::on_settings(app, s);
+}
+
 /// Stores settings and runs every area's reaction to them.
 pub fn apply_settings(app: &AppHandle, value: Settings) -> Settings {
     let value = crate::settings::store(app, value);
-    crate::pet::on_settings(app, &value);
+    settings_hooks(app, &value);
     tray::update(app);
     let _ = app.emit(EV_SETTINGS, &value);
     value
@@ -118,7 +128,7 @@ pub fn install_crash_log(path: PathBuf) {
 /// Runs after every area's `setup`, so their state exists.
 pub fn setup(app: &tauri::App) -> tauri::Result<()> {
     app.manage(Mutex::new(popover::PopoverState::default()));
-    crate::pet::on_settings(app.handle(), &crate::settings::current(app.handle()));
+    settings_hooks(app.handle(), &crate::settings::current(app.handle()));
     tray::create(app)?;
     crate::pet::start_tray_sprite(app.handle());
     let handle = app.handle().clone();

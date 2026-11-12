@@ -67,13 +67,13 @@ scripts/test.mjs      frontend test runner
 
 | Area | Owns (may create anything under these paths) |
 |---|---|
-| **providers** | `src-tauri/src/providers/**` (pricing table goes here too: `providers/pricing.rs`), `src/areas/providers/**`, `shared.ts` `#region providers` |
-| **limits** | `src-tauri/src/limits/**`, `src/areas/limits/**`, `shared.ts` `#region limits` |
-| **companion** | `src-tauri/src/companion/**` (incl. `api.rs` bodies), `src/areas/companion/**`, `shared.ts` `#region companion` |
-| **home-usage** | `src-tauri/src/home/**`, `src/areas/home-usage/**`, `shared.ts` `#region home-usage` |
-| **shop-bag-dex** | `src-tauri/src/economy/**`, `src/areas/shop-bag-dex/**`, `shared.ts` `#region shop-bag-dex` |
-| **pet-settings-misc** | `src-tauri/src/pet/**`, `src/areas/pet-settings-misc/**`, `shared.ts` `#region pet-settings-misc` |
-| **foundation / shared** (frozen) | `src-tauri/src/{lib,model,store,format}.rs`, `src-tauri/src/settings/**`, `src-tauri/src/shell/**`, `src-tauri/tauri.conf.json`, `src-tauri/capabilities/**`, `src-tauri/Cargo.toml`*, `package.json`*, `src/{main,App}.tsx`, `src/shared.ts` (outside regions), `src/kit/**`, `src/shell/**`, `src/i18n.ts`, `src/App.css`, `scripts/**`, `docs/parity/ARCHITECTURE.md` |
+| **providers** | `src-tauri/capabilities/providers.json`, `src-tauri/src/providers/**` (pricing table goes here too: `providers/pricing.rs`), `src/areas/providers/**`, `shared.ts` `#region providers` |
+| **limits** | `src-tauri/capabilities/limits.json`, `src-tauri/src/limits/**`, `src/areas/limits/**`, `shared.ts` `#region limits` |
+| **companion** | `src-tauri/capabilities/companion.json`, `src-tauri/src/companion/**` (incl. `api.rs` bodies), `src/areas/companion/**`, `shared.ts` `#region companion` |
+| **home-usage** | `src-tauri/capabilities/home-usage.json`, `src-tauri/src/home/**`, `src/areas/home-usage/**`, `shared.ts` `#region home-usage` |
+| **shop-bag-dex** | `src-tauri/capabilities/shop-bag-dex.json`, `src-tauri/src/economy/**`, `src/areas/shop-bag-dex/**`, `shared.ts` `#region shop-bag-dex` |
+| **pet-settings-misc** | `src-tauri/capabilities/pet-settings-misc.json`, `src-tauri/src/pet/**`, `src/areas/pet-settings-misc/**`, `shared.ts` `#region pet-settings-misc` |
+| **foundation / shared** (frozen) | `src-tauri/src/{lib,model,store,format}.rs`, `src-tauri/src/settings/**`, `src-tauri/src/shell/**`, `src-tauri/tauri.conf.json`, `src-tauri/capabilities/default.json`, `src-tauri/Cargo.toml`*, `package.json`*, `src/{main,App}.tsx`, `src/shared.ts` (outside regions), `src/kit/**`, `src/shell/**`, `src/i18n.ts`, `src/App.css`, `scripts/**`, `docs/parity/ARCHITECTURE.md` |
 
 \* Dependencies: an area may add a crate or npm package it alone uses. Put it on its own line at the end of
 the dependency list so merges stay trivial, and say so in the PR.
@@ -104,9 +104,10 @@ exported components. Never edit the other area's files.
 4. **Tray tooltip pieces** (signatures fixed; the bodies belong to their areas):
    - `limits::menu_limit_line(app, &Settings) -> Option<String>`
    - `companion::menu_growth_text(app, lang) -> String`
-5. **Settings side effects.** `pet::on_settings(app, &Settings)` runs on every settings change and at
-   launch. Pet visibility is handled there today. If another area needs this hook, file a foundation
-   change request.
+5. **Settings side effects.** Every area has `pub fn on_settings(app, &Settings)` (a no-op until the
+   area needs it). The shell calls all of them, in setup order, on every settings change and once at
+   launch, then refreshes the tray. Pet visibility is handled in `pet::on_settings`; limits clears its
+   values there when `status_checks_enabled` goes off, and so on. Keep the signature.
 6. **Tray sprite.** `pet::start_tray_sprite(app)` is called once after the tray exists. Draw frames with
    `shell::tray::set_icon(app, Some(Image))`. Passing `None` restores the app icon. Pause the animation
    while `shell::popover_visible(app)` is true.
@@ -116,6 +117,9 @@ exported components. Never edit the other area's files.
 8. **Notifications.** Use `shell::notify(app, title, body)`.
 9. **Persistence.** Use `store::{load_json, save_json}` on a file in the app data dir. Each area owns its
    own file, except economy, which writes inside `companion.json` (see §7).
+10. **Capabilities.** An area that needs a Tauri permission (for example a window or plugin permission
+   for its own window) adds `src-tauri/capabilities/<area>.json` with its own `identifier`. Tauri loads
+   every file in that folder, so `default.json` stays frozen.
 
 ### Frontend
 
@@ -129,10 +133,11 @@ exported components. Never edit the other area's files.
    `TabProps` is `{usage, companion, limits, settings, save, goTo}`. The shell gives each body the space
    between the picker and the footer (about 508 px at 604 high), with a 12 px scroller inset. Bodies scroll
    internally.
-2. **Home slots.** `HomeTab` (home-usage) renders `areas/companion/CompanionCard` (default export, prop
-   `{c}`) and `areas/limits/LimitsSection` (default export, props `{all, settings}`). Each slot's owner may
-   change its props. The owner must update the single call site in `HomeTab.tsx` in the same PR and
-   mention it.
+2. **Home slots.** `HomeTab` (home-usage) renders `areas/companion/CompanionCard` and
+   `areas/limits/LimitsSection` (default exports) as `<Slot {...props} />`, passing its whole `TabProps`.
+   The slot owner reads whatever it needs from `TabProps` and fetches anything else with its own hooks,
+   so it never edits `HomeTab.tsx`. Home-usage keeps both call sites with the spread props, in this
+   order: CompanionCard first, LimitsSection inside the limits block (home-usage.md §5.2).
 3. **Settings rows.** Each area exports `settingsRows: SettingsRow[]` from `src/areas/<area>/settings.tsx`.
    `shell/settings.tsx` collects them with `import.meta.glob`. A row is
    `{id, group, order, Row}`:

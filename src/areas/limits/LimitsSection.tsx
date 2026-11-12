@@ -1,6 +1,6 @@
 // Official limits on Home (limits.md §5). Owner: limits area. Home-usage renders it as a slot.
 import { LegacyDict } from "../../i18n";
-import { ProviderLimits, Settings, useI18n } from "../../shared";
+import { TabProps, useI18n } from "../../shared";
 
 const PROVIDER: Record<string, string> = { claude: "Claude Code", codex: "Codex" };
 
@@ -18,7 +18,8 @@ function windowName(key: string, t: LegacyDict) {
   return n ? `${n}${unit === "d" ? t.days : unit === "h" ? t.hours : t.minutes}` : key;
 }
 
-export default function LimitsSection({ all, settings }: { all: ProviderLimits[]; settings: Settings }) {
+/** Home slot: receives the full TabProps so its inputs can change without touching HomeTab. */
+export default function LimitsSection({ limits: all, settings }: TabProps) {
   const { t } = useI18n();
   const mode = settings.limit_display;
   if (all.length === 0) return null;

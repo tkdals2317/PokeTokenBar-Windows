@@ -37,4 +37,7 @@ pub fn setup(_app: &tauri::App) -> tauri::Result<()> {
 /// Called by the shell after every usage refresh (record the day ledger here).
 pub fn on_usage(_app: &tauri::AppHandle, _snap: &crate::model::UsageSnapshot) {}
 
+/// Called by the shell on every settings change and once at launch (react to this area's keys here).
+pub fn on_settings(_app: &tauri::AppHandle, _s: &crate::settings::Settings) {}
+
 crate::area_commands![];

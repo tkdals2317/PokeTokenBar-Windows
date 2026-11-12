@@ -1,7 +1,7 @@
 // Companion header on Home (companion.md §5). Owner: companion area. Home-usage renders it as a slot.
 import { compact } from "../../kit/format";
 import { natureName } from "../../i18n";
-import { Companion, EGG, nameOf, sprite, useI18n } from "../../shared";
+import { EGG, TabProps, nameOf, sprite, useI18n } from "../../shared";
 
 function Progress({ value, max, label }: { value: number; max: number; label: string }) {
   const pct = Math.min(100, (value / max) * 100);
@@ -13,8 +13,10 @@ function Progress({ value, max, label }: { value: number; max: number; label: st
   );
 }
 
-export default function CompanionCard({ c }: { c: Companion }) {
+/** Home slot: receives the full TabProps so its inputs can change without touching HomeTab. */
+export default function CompanionCard({ companion: c }: TabProps) {
   const { t, lang } = useI18n();
+  if (!c) return null;
   const mon = c.active;
   if (!mon) {
     return (

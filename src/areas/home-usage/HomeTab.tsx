@@ -5,13 +5,14 @@ import LimitsSection from "../limits/LimitsSection";
 import { compact } from "../../kit/format";
 import { TabProps, todayKey, todayTotal, useI18n } from "../../shared";
 
-export default function HomeTab({ usage, companion, limits, settings }: TabProps) {
+export default function HomeTab(props: TabProps) {
+  const { usage } = props;
   const { t } = useI18n();
   const day = todayKey();
   const today = (n: number | undefined) => compact(n ?? 0);
   return (
     <div className="home">
-      {companion && <CompanionCard c={companion} />}
+      <CompanionCard {...props} />
       {usage && (
         <section className="card">
           <div className="row">
@@ -26,7 +27,7 @@ export default function HomeTab({ usage, companion, limits, settings }: TabProps
           ))}
         </section>
       )}
-      <LimitsSection all={limits} settings={settings} />
+      <LimitsSection {...props} />
     </div>
   );
 }
