@@ -1,3 +1,4 @@
+//! Usage providers: local CLI logs → `model::UsageSnapshot`. Owner: providers area.
 //! Today's token usage read straight from local CLI logs.
 //! - Claude: `~/.claude/projects/**/*.jsonl`, `type:"assistant"` lines with `message.usage`.
 //!   Resumed sessions/sidechains log the same turn again, so dedup by `(message.id, requestId)`
@@ -5,40 +6,14 @@
 //! - Codex: `~/.codex/sessions/**/rollout-*.jsonl`, `payload.type:"token_count"` → `info.last_token_usage`.
 
 use chrono::{DateTime, Local, NaiveDate};
-use serde::Serialize;
+use crate::model::{DailyUsage, ProviderSnapshot, Tokens, Usage, UsageSnapshot};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-
-#[derive(Debug, Default, Clone, Copy, Serialize, PartialEq)]
-pub struct Tokens {
-    pub input: u64,
-    pub output: u64,
-    pub cache_write: u64,
-    pub cache_read: u64,
-}
-
-impl Tokens {
-    pub fn total(&self) -> u64 {
-        self.input + self.output + self.cache_write + self.cache_read
-    }
-    fn add(&mut self, o: &Tokens) {
-        self.input += o.input;
-        self.output += o.output;
-        self.cache_write += o.cache_write;
-        self.cache_read += o.cache_read;
-    }
-}
-
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct TodayUsage {
-    pub claude: Tokens,
-    pub codex: Tokens,
-    pub total: u64,
-}
 
 fn n(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(Value::as_u64).unwrap_or(0)
@@ -135,9 +110,9 @@ fn start_of_today() -> SystemTime {
 }
 
 // ponytail: full rescan each refresh. Add per-file (mtime, offset) cache when logs get large.
-pub fn read_today() -> TodayUsage {
+fn read_today() -> (Tokens, Tokens) {
     let Some(home) = std::env::home_dir() else {
-        return TodayUsage::default();
+        return Default::default();
     };
     let day = Local::now().date_naive();
     let since = start_of_today();
@@ -171,23 +146,89 @@ pub fn read_today() -> TodayUsage {
         }
     }
 
-    TodayUsage {
-        total: claude.total() + codex.total(),
-        claude,
-        codex,
+    (claude, codex)
+}
+
+
+// ---- snapshot ----
+
+fn snapshot_of(id: &str, name: &str, t: Tokens, day: &str) -> ProviderSnapshot {
+    ProviderSnapshot {
+        provider_id: id.into(),
+        display_name: name.into(),
+        today: Some(DailyUsage {
+            date: day.into(),
+            usage: Usage { tokens: t, total: t.total(), ..Default::default() },
+            models: None,
+        }),
+        // ponytail: no price table yet, so cost stays hidden. Flip when ModelPricing is ported.
+        reports_cost: false,
+        ..Default::default()
     }
 }
 
-/// `200.7M` style compact number, like the original menu bar label.
-pub fn compact(v: u64) -> String {
-    let f = v as f64;
-    match v {
-        0..1_000 => v.to_string(),
-        1_000..1_000_000 => format!("{:.1}K", f / 1e3),
-        1_000_000..1_000_000_000 => format!("{:.1}M", f / 1e6),
-        _ => format!("{:.1}B", f / 1e9),
+/// One full read. Today only for now; week/month/daily series are the providers area's job.
+pub fn read_snapshot() -> UsageSnapshot {
+    let day = crate::model::today_key();
+    let (claude, codex) = read_today();
+    UsageSnapshot {
+        providers: vec![
+            snapshot_of("claude_code", "Claude Code", claude, &day),
+            snapshot_of("codex", "Codex", codex, &day),
+        ],
+        fetched_at: Some(Local::now().to_rfc3339()),
+        error: None,
     }
 }
+
+// ---- area wiring (see ARCHITECTURE.md) ----
+
+/// Keys this area owns inside `settings.json` (flattened into `settings::Settings`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderSettings {
+    /// Opt-out list of provider ids, sorted.
+    pub disabled_providers: Vec<String>,
+    /// provider id → raw comma/newline separated folders.
+    pub custom_scan_roots: std::collections::BTreeMap<String, String>,
+    pub additional_claude_config_dirs: String,
+}
+
+impl ProviderSettings {
+    pub fn sanitize(&mut self) {
+        self.disabled_providers.sort();
+        self.disabled_providers.dedup();
+    }
+}
+
+type Shared = std::sync::Mutex<UsageSnapshot>;
+
+pub fn setup(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::Manager;
+    app.manage::<Shared>(Default::default());
+    Ok(())
+}
+
+/// Latest snapshot (empty before the first refresh).
+pub fn current(app: &tauri::AppHandle) -> UsageSnapshot {
+    use tauri::Manager;
+    app.state::<Shared>().lock().unwrap().clone()
+}
+
+/// Called by the shell scheduler. Reads, stores and returns the new snapshot; the shell emits it.
+pub fn refresh(app: &tauri::AppHandle) -> UsageSnapshot {
+    use tauri::Manager;
+    let snap = read_snapshot();
+    *app.state::<Shared>().lock().unwrap() = snap.clone();
+    snap
+}
+
+#[tauri::command]
+fn usage_snapshot(app: tauri::AppHandle) -> UsageSnapshot {
+    current(&app)
+}
+
+crate::area_commands![usage_snapshot];
 
 #[cfg(test)]
 mod tests {
@@ -229,12 +270,6 @@ mod tests {
             }
         );
     }
-
-    #[test]
-    fn compact_formats() {
-        assert_eq!(compact(999), "999");
-        assert_eq!(compact(200_700_000), "200.7M");
-    }
 }
 
 /// `cargo test real_logs -- --ignored --nocapture` prints today's usage from this machine.
@@ -242,5 +277,5 @@ mod tests {
 #[test]
 #[ignore]
 fn real_logs() {
-    println!("{:?}", read_today());
+    println!("{:?}", read_snapshot());
 }

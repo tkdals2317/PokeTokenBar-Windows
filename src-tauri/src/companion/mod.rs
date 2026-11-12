@@ -1,10 +1,14 @@
 //! Pokémon companion: egg → hatch → evolve → graduate into the Pokédex.
 //! Balance is ported from the original `CompanionModel.swift` / `CompanionStore.swift`.
+//! Owner: companion area. See docs/parity/ARCHITECTURE.md.
+
+pub mod api;
+pub mod pokeapi;
 
 use fastrand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use crate::store::{load_json, save_json};
 use std::path::{Path, PathBuf};
 
 pub const EGG_HATCH_THRESHOLD: u64 = 5_000_000;
@@ -177,6 +181,9 @@ pub struct State {
     pub collected_finals: HashSet<String>,
     /// Growth multiplier from Settings. 0 (older saves) means 1.
     pub growth_difficulty: f64,
+    /// Wallet, bag and candy grants. Owned by the shop-bag-dex area (`economy`), saved in the same file.
+    #[serde(flatten)]
+    pub economy: crate::economy::EconomyState,
 }
 
 impl State {
@@ -219,6 +226,10 @@ impl State {
             self.ledger = today.clone();
             self.last_date = date.to_string();
             return 0;
+        }
+        // Saves before v0.3 keyed Claude Code as "claude"; providers now use the macOS id.
+        if let Some(v) = self.ledger.remove("claude") {
+            self.ledger.entry("claude_code".into()).or_insert(v);
         }
         let delta = if date != self.last_date {
             // A new day's totals aren't comparable to yesterday's: count them all.
@@ -405,27 +416,6 @@ pub fn choose_base(index: &[(u32, u32)], state: &State, rng: &mut Rng) -> Option
     None
 }
 
-/// Reads a JSON file. One that fails to parse is kept as `.corrupt` instead of being overwritten.
-pub fn load_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-            let _ = fs::rename(path, path.with_extension("json.corrupt"));
-            T::default()
-        }),
-        Err(_) => T::default(),
-    }
-}
-
-/// Atomic write (temp file + rename) so a crash never leaves a half-written file.
-pub fn save_json<T: Serialize>(path: &Path, value: &T) {
-    let tmp = path.with_extension("json.tmp");
-    if let Ok(json) = serde_json::to_vec_pretty(value) {
-        if fs::write(&tmp, json).is_ok() {
-            let _ = fs::rename(&tmp, path);
-        }
-    }
-}
-
 pub struct Store {
     pub path: PathBuf,
     pub state: State,
@@ -444,6 +434,181 @@ impl Store {
         self.path.parent().unwrap_or(Path::new("."))
     }
 }
+
+
+// ---- area wiring (see ARCHITECTURE.md) ----
+
+use crate::model::{EV_COMPANION, EV_COMPANION_EVENT, UsageSnapshot};
+use serde_json::{Value, json};
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager};
+
+/// Keys this area owns inside `settings.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompanionSettings {
+    /// Species shown by the floating pet and tray instead of the active Pokémon.
+    pub representative: Option<u32>,
+    pub companion_notifications: bool,
+}
+
+impl Default for CompanionSettings {
+    fn default() -> Self {
+        CompanionSettings { representative: None, companion_notifications: true }
+    }
+}
+
+impl CompanionSettings {
+    pub fn sanitize(&mut self) {}
+}
+
+/// The one lock for `companion.json`. Economy mutates its block through the same lock.
+pub type SharedStore = Mutex<Store>;
+
+pub fn setup(app: &tauri::App, dir: &Path) -> tauri::Result<()> {
+    app.manage::<SharedStore>(Mutex::new(Store::load(dir.join("companion.json"))));
+    Ok(())
+}
+
+/// Runs `f` on the saved state under the lock, saves, and emits `companion`.
+pub fn update<T>(app: &AppHandle, f: impl FnOnce(&mut State) -> T) -> T {
+    let store = app.state::<SharedStore>();
+    let mut s = store.lock().unwrap();
+    let out = f(&mut s.state);
+    s.save();
+    let _ = app.emit(EV_COMPANION, view(&s));
+    out
+}
+
+/// What the UI needs: saved state plus the thresholds it can't derive.
+pub fn view(store: &Store) -> Value {
+    let s = &store.state;
+    json!({
+        "active": s.active,
+        "egg_usage": s.egg_usage,
+        "egg_threshold": s.egg_threshold(),
+        "threshold": s.active.as_ref().map(|m| m.threshold(s.difficulty())),
+        "difficulty": s.difficulty(),
+        "dex": s.dex,
+    })
+}
+
+/// Notification titles. es/fr/pt/de/ru fall back to English until this area ports them.
+fn text(lang: &str, key: &str) -> &'static str {
+    match (lang, key) {
+        ("ko", "hatched") => "알이 부화했어요!",
+        ("ko", "shiny") => "✨ 이로치가 태어났어요!",
+        ("ko", "evolved") => "진화했어요!",
+        ("ko", "graduated") => "졸업! 도감에 등록됐어요",
+        ("ja", "hatched") => "タマゴがかえった！",
+        ("ja", "shiny") => "✨ 色違いが生まれた！",
+        ("ja", "evolved") => "進化した！",
+        ("ja", "graduated") => "卒業！図鑑に登録されました",
+        (_, "hatched") => "Your egg hatched!",
+        (_, "shiny") => "✨ A shiny hatched!",
+        (_, "evolved") => "Evolved!",
+        (_, "graduated") => "Graduated! Added to the Pokédex",
+        _ => "",
+    }
+}
+
+/// Hatches the egg if it's ready. Network calls run without holding the store lock.
+fn hatch_if_ready(app: &AppHandle, rng: &mut Rng) -> Vec<Event> {
+    let store = app.state::<SharedStore>();
+    let dir = {
+        let s = store.lock().unwrap();
+        if !s.state.ready_to_hatch() {
+            return vec![];
+        }
+        s.dir().to_path_buf()
+    };
+    // Any failure keeps the egg; the next tick retries.
+    let Ok(index) = pokeapi::base_index(&dir) else { return vec![] };
+    let Some(base) = choose_base(&index, &store.lock().unwrap().state, rng) else {
+        return vec![];
+    };
+    let Ok(line) = pokeapi::line(base) else { return vec![] };
+    let mut s = store.lock().unwrap();
+    if !s.state.ready_to_hatch() {
+        return vec![];
+    }
+    s.state.hatch(line, rng)
+}
+
+/// Called by the shell after every usage refresh: credit growth, hatch, notify, emit.
+pub fn on_usage(app: &AppHandle, snap: &UsageSnapshot) {
+    let date = crate::model::today_key();
+    let today = snap.today_by_provider(&date);
+    let mut rng = Rng::new();
+    let store = app.state::<SharedStore>();
+    let mut events = {
+        let mut s = store.lock().unwrap();
+        let delta = s.state.credit(&today, &date);
+        s.state.feed(delta, &mut rng)
+    };
+    events.extend(hatch_if_ready(app, &mut rng));
+
+    let settings = crate::settings::current(app);
+    let s = store.lock().unwrap();
+    s.save();
+    let _ = app.emit(EV_COMPANION, view(&s));
+    for e in events {
+        if settings.companion.companion_notifications {
+            let (key, id) = match e {
+                Event::Hatched { id, shiny: true } => ("shiny", id),
+                Event::Hatched { id, .. } => ("hatched", id),
+                Event::Evolved { id } => ("evolved", id),
+                Event::Graduated { id } => ("graduated", id),
+            };
+            let lang = &settings.shell.language;
+            crate::shell::notify(app, text(lang, key), &s.state.name_of(id, lang));
+        }
+        let _ = app.emit(EV_COMPANION_EVENT, e);
+    }
+}
+
+/// "Growth 42%" / "Hatch 42%" for the tray tooltip (ui-shell.md §3.1, integer floor).
+pub fn menu_growth_text(app: &AppHandle, lang: &str) -> String {
+    let store = app.state::<SharedStore>();
+    let s = &store.lock().unwrap().state;
+    let (credits, total, egg) = match &s.active {
+        None => (s.egg_usage, s.egg_threshold(), true),
+        Some(m) => (m.used_at_stage, m.threshold(s.difficulty()), false),
+    };
+    let pct = if total > 0 { credits.min(total) * 100 / total } else { 0 };
+    let word = match (lang, egg) {
+        ("ko", true) => "부화",
+        ("ja", true) => "孵化",
+        ("es", true) => "Eclosión",
+        ("fr", true) => "Éclosion",
+        ("pt", true) => "Eclosão",
+        ("de", true) => "Schlüpfen",
+        ("ru", true) => "Вылупление",
+        (_, true) => "Hatch",
+        ("ko", false) => "성장",
+        ("ja", false) => "成長",
+        ("es", false) => "Crecimiento",
+        ("fr", false) => "Croissance",
+        ("pt", false) => "Crescimento",
+        ("de", false) => "Wachstum",
+        ("ru", false) => "Рост",
+        (_, false) => "Growth",
+    };
+    format!("{word} {pct}%")
+}
+
+#[tauri::command]
+fn companion(store: tauri::State<SharedStore>) -> Value {
+    view(&store.lock().unwrap())
+}
+
+#[tauri::command]
+fn set_difficulty(app: AppHandle, value: f64) -> Value {
+    update(&app, |s| s.set_difficulty(value));
+    view(&app.state::<SharedStore>().lock().unwrap())
+}
+
+crate::area_commands![companion, set_difficulty];
 
 #[cfg(test)]
 mod tests {
@@ -480,8 +645,8 @@ mod tests {
     #[test]
     fn credit_seeds_then_counts_growth() {
         let mut s = State::default();
-        let day = |c: u64, x: u64| HashMap::from([("claude".into(), c), ("codex".into(), x)]);
-        assert_eq!(s.credit(&day(100, 0), "d1"), 0); // baseline
+        let day = |c: u64, x: u64| HashMap::from([("claude_code".into(), c), ("codex".into(), x)]);
+        assert_eq!(s.credit(&HashMap::from([("claude".into(), 100), ("codex".into(), 0)]), "d1"), 0); // old-id baseline
         assert_eq!(s.credit(&day(150, 10), "d1"), 60);
         assert_eq!(s.credit(&day(120, 10), "d1"), 0); // regression rebases
         assert_eq!(s.credit(&day(130, 10), "d1"), 10);

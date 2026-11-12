@@ -15,12 +15,13 @@
         "label": "main",
         "title": "PokeTokenBar",
         "width": 360,
-        "height": 680,
+        "height": 604,
         "resizable": false,
-        "visible": true,
+        "decorations": false,
+        "shadow": true,
+        "visible": false,
         "skipTaskbar": true,
-        "alwaysOnTop": true,
-        "center": true
+        "alwaysOnTop": true
       },
       {
         "label": "pet",
@@ -34,7 +35,7 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": false,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {

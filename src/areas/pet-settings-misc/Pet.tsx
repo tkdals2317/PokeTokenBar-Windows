@@ -2,12 +2,16 @@ import { useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { DICTS } from "./i18n";
-import { EGG, displayed, fmt, nameOf, petSize, resizePet, sprite, useBackend } from "./shared";
+// Floating pet window. Owner: pet-settings-misc area.
+import { compact } from "../../kit/format";
+import { legacyDict } from "../../i18n";
+import { EGG, displayed, nameOf, petSize, resizePet, sprite, todayTotal, useBackend } from "../../shared";
 
 const DRAG_SLOP = 4;
 const MENU_SIZES = [48, 72, 96, 120, 160, 224, 288, 384];
 const toggle = (label: string) => invoke("toggle_window", { label });
+/** Pet click opens the popover (never toggles it off). */
+const openPopover = () => invoke("show_popover");
 
 const MENU = {
   ko: { open: "창 열기", size: "크기", hide: "펫 숨기기", quit: "종료" },
@@ -19,21 +23,21 @@ const MENU = {
 export default function Pet() {
   const { companion, usage, settings } = useBackend();
   const press = useRef<{ x: number; y: number } | null>(null);
-  const lang = settings?.language ?? "ko";
-  const t = DICTS[lang];
+  const lang = settings?.language ?? "en";
+  const t = legacyDict(lang);
 
   const shown = companion ? displayed(companion, settings) : null;
   const src = shown ? sprite(shown.id, shown.shiny) : EGG;
   const name = shown ? nameOf(shown.names, shown.id, lang) : t.egg;
-  const title = usage ? `${name} · ${t.today} ${fmt.format(usage.total)}` : name;
+  const title = usage ? `${name} · ${t.today} ${compact(todayTotal(usage))}` : name;
 
   async function showMenu(e: React.MouseEvent) {
     e.preventDefault();
     const current = await petSize();
-    const m = MENU[lang];
+    const m = MENU[lang as keyof typeof MENU] ?? MENU.en;
     const menu = await Menu.new({
       items: [
-        { id: "open", text: m.open, action: () => toggle("main") },
+        { id: "open", text: m.open, action: openPopover },
         {
           text: m.size,
           items: MENU_SIZES.map((px) => ({
@@ -65,7 +69,7 @@ export default function Pet() {
         }
       }}
       onMouseUp={() => {
-        if (press.current) toggle("main");
+        if (press.current) openPopover();
         press.current = null;
       }}
     >

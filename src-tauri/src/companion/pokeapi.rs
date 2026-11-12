@@ -1,6 +1,6 @@
 //! PokéAPI: hatch candidates (GraphQL, cached on disk) and evolution lines (REST).
 
-use crate::companion::{DITTO_ID, EvoNode, Line, MAX_SPECIES_ID, Names, Rarity};
+use super::{DITTO_ID, EvoNode, Line, MAX_SPECIES_ID, Names, Rarity};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;

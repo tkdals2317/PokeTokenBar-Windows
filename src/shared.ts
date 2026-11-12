@@ -1,13 +1,120 @@
+// Backend contract (mirrors src-tauri/src/model.rs and the area settings blocks) and app-wide hooks.
+// Owner: foundation, except the `#region <area>` blocks, which belong to that area.
 import { createContext, useContext, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LogicalSize, PhysicalPosition, Window } from "@tauri-apps/api/window";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { DICTS, Lang, nameLang } from "./i18n";
+import { LegacyDict, legacyDict, nameLang } from "./i18n";
+import type { Lang } from "./kit/i18n";
+import type { CostCoverage } from "./kit/format";
+
+// ---- usage model (model.rs) ----
 
 export type Tokens = { input: number; output: number; cache_write: number; cache_read: number };
-export type TodayUsage = { claude: Tokens; codex: Tokens; total: number };
+export type Usage = { tokens: Tokens; total: number; cost: number; coverage: CostCoverage };
+export type ModelUsage = Usage & { model: string };
+export type DailyUsage = Usage & { date: string; models: ModelUsage[] | null };
+export type PeriodUsage = Usage & { from: string; to: string };
+export type DayPoint = { date: string; total: number; cost: number };
+export type ActiveBlock = { start: string; end: string; total: number; tokens_per_minute: number };
+export type ProviderSnapshot = {
+  provider_id: string;
+  display_name: string;
+  today: DailyUsage | null;
+  active_block: ActiveBlock | null;
+  week_total: PeriodUsage | null;
+  month_total: PeriodUsage | null;
+  month_daily: DayPoint[];
+  recent_daily: DayPoint[];
+  last_usage: string | null;
+  reports_cost: boolean;
+};
+export type UsageSnapshot = { providers: ProviderSnapshot[]; fetched_at: string | null; error: string | null };
+export type DailyLedger = { tokens_by_day: Record<string, number>; covered_since: string | null };
+
+/** Local `yyyy-MM-dd`. */
+export const todayKey = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+export const todayTotal = (u: UsageSnapshot, day = todayKey()) =>
+  u.providers.reduce((n, p) => n + (p.today?.date === day ? p.today.total : 0), 0);
+
+/** `popover-opened` payload: where the popover lands. Default Home, Settings closed. */
+export type PopoverOpened = { tab: Tab | null; settings: boolean };
+export type Tab = "home" | "shop" | "bag" | "collection";
+
+/** Props every tab body receives from the shell. */
+export type TabProps = {
+  usage: UsageSnapshot | null;
+  companion: Companion | null;
+  limits: ProviderLimits[];
+  settings: Settings;
+  save: (next: Settings) => void;
+  goTo: (tab: Tab) => void;
+};
+
+// ---- settings (settings.json, one flat object; each block mirrors an area's Rust struct) ----
+
+export type ShellSettings = {
+  language: Lang;
+  refresh_minutes: number;
+  show_tokens_in_menu: boolean;
+  show_cost_in_menu: boolean;
+  show_growth_in_menu: boolean;
+  show_limit_in_menu: boolean;
+  menu_limit_color_mode: "gauge" | "attention" | "off";
+  update_notifications_enabled: boolean;
+  skipped_update_version: string | null;
+};
+// #region providers
+export type ProviderSettings = {
+  disabled_providers: string[];
+  custom_scan_roots: Record<string, string>;
+  additional_claude_config_dirs: string;
+};
+// #endregion
+// #region limits
+export type LimitSettings = {
+  limit_display: "used" | "remaining";
+  limit_notifications: boolean;
+  warn_threshold: number;
+  crit_threshold: number;
+  status_checks_enabled: boolean;
+  claude_tracked_account: string;
+};
+// #endregion
+// #region home-usage
+export type HomeSettings = {
+  daily_trend_window: "7d" | "14d" | "21d" | "month";
+  activity_visualization: "monthlyBars" | "recentHeatmap";
+};
+// #endregion
+// #region companion
+export type CompanionSettings = { representative: number | null; companion_notifications: boolean };
+// #endregion
+// #region shop-bag-dex
+export type EconomySettings = { shop_difficulty: number };
+// #endregion
+// #region pet-settings-misc
+export type PetSettings = {
+  floating_pet_enabled: boolean;
+  always_faces_back: boolean;
+  floating_pet_size: number;
+  floating_pet_bubble_alerts: boolean;
+  floating_pet_agent_activity: boolean;
+  animation_quality: "powerSaver" | "balanced" | "smooth";
+};
+// #endregion
+export type Settings = ShellSettings &
+  ProviderSettings &
+  LimitSettings &
+  HomeSettings &
+  CompanionSettings &
+  EconomySettings &
+  PetSettings;
+
+// #region companion
 export type Rarity = "common" | "uncommon" | "rare" | "legendary";
 export type Names = Record<string, Record<string, string>>;
 export type Mon = {
@@ -37,21 +144,6 @@ export type Companion = {
   difficulty: number;
   dex: DexEntry[];
 };
-export type LimitWindow = { key: string; used_percent: number; resets_at: string | null };
-export type ProviderLimits = { provider: string; windows: LimitWindow[]; error: string | null };
-export type Settings = {
-  language: Lang;
-  refresh_minutes: number;
-  limit_display: "used" | "remaining";
-  tray_tokens: boolean;
-  tray_limit: boolean;
-  pet_enabled: boolean;
-  limit_notifications: boolean;
-  warn_threshold: number;
-  crit_threshold: number;
-  companion_notifications: boolean;
-  representative: number | null;
-};
 export type CompanionEvent =
   | { kind: "hatched"; id: number; shiny: boolean }
   | { kind: "evolved"; id: number }
@@ -62,41 +154,10 @@ export const sprite = (id: number, shiny = false) =>
   `${SPRITES}/versions/generation-v/black-white/animated/${shiny ? "shiny/" : ""}${id}.gif`;
 export const EGG = `${SPRITES}/egg.png`;
 
-export const fmt = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
-export const sum = (t: Tokens) => t.input + t.output + t.cache_write + t.cache_read;
-
 export function nameOf(names: Names, id: number, lang: Lang) {
   const n = names[id] ?? {};
   return n[nameLang(lang)] ?? n.en ?? `#${id}`;
 }
-
-/** Live backend state: initial fetch plus the events the Rust side emits on every refresh. */
-export function useBackend() {
-  const [usage, setUsage] = useState<TodayUsage | null>(null);
-  const [companion, setCompanion] = useState<Companion | null>(null);
-  const [limits, setLimits] = useState<ProviderLimits[]>([]);
-  const [settings, setSettings] = useState<Settings | null>(null);
-
-  useEffect(() => {
-    invoke<TodayUsage>("today_usage").then(setUsage);
-    invoke<Companion>("companion").then(setCompanion);
-    invoke<ProviderLimits[]>("limits").then(setLimits);
-    invoke<Settings>("get_settings").then(setSettings);
-    const subs = [
-      listen<TodayUsage>("usage", (e) => setUsage(e.payload)),
-      listen<Companion>("companion", (e) => setCompanion(e.payload)),
-      listen<ProviderLimits[]>("limits", (e) => setLimits(e.payload)),
-      listen<Settings>("settings", (e) => setSettings(e.payload)),
-    ];
-    return () => subs.forEach((p) => p.then((f) => f()));
-  }, []);
-
-  const saveSettings = (next: Settings) => invoke<Settings>("set_settings", { value: next }).then(setSettings);
-  return { usage, companion, limits, settings, saveSettings };
-}
-
-export const I18n = createContext<{ lang: Lang; t: (typeof DICTS)["ko"] }>({ lang: "ko", t: DICTS.ko });
-export const useI18n = () => useContext(I18n);
 
 /** Species the user owns: every graduated chain plus the stages the active Pokémon has reached. */
 export type OwnedSpecies = {
@@ -130,7 +191,55 @@ export function displayed(c: Companion, s: Settings | null): { id: number; shiny
   const a = c.active;
   return a ? { id: a.path_ids[a.stage_index], shiny: a.is_shiny, names: a.line.names } : null;
 }
+// #endregion
 
+// ---- live backend state ----
+
+/** Initial fetch plus the events the Rust side emits on every refresh. */
+export function useBackend() {
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null);
+  const [companion, setCompanion] = useState<Companion | null>(null);
+  const [limits, setLimits] = useState<ProviderLimits[]>([]);
+  const [settings, setSettings] = useState<Settings | null>(null);
+
+  useEffect(() => {
+    invoke<UsageSnapshot>("usage_snapshot").then(setUsage);
+    invoke<Companion>("companion").then(setCompanion);
+    invoke<ProviderLimits[]>("limits").then(setLimits);
+    invoke<Settings>("get_settings").then(setSettings);
+    const subs = [
+      listen<UsageSnapshot>("usage", (e) => setUsage(e.payload)),
+      listen<Companion>("companion", (e) => setCompanion(e.payload)),
+      listen<ProviderLimits[]>("limits", (e) => setLimits(e.payload)),
+      listen<Settings>("settings", (e) => setSettings(e.payload)),
+    ];
+    return () => subs.forEach((p) => p.then((f) => f()));
+  }, []);
+
+  const saveSettings = (next: Settings) => invoke<Settings>("set_settings", { value: next }).then(setSettings);
+  return { usage, companion, limits, settings, saveSettings };
+}
+
+/** Runs `cb` every time the popover opens (reset per-open UI state here). */
+export function usePopoverOpened(cb: (p: PopoverOpened) => void) {
+  useEffect(() => {
+    const sub = listen<PopoverOpened>("popover-opened", (e) => cb(e.payload));
+    return () => {
+      sub.then((f) => f());
+    };
+  }, [cb]);
+}
+
+// #region limits
+export type LimitWindow = { key: string; used_percent: number; resets_at: string | null };
+export type ProviderLimits = { provider: string; windows: LimitWindow[]; error: string | null };
+// #endregion
+
+/** LEGACY context for components still on the frozen `src/i18n.ts` dictionary. */
+export const I18n = createContext<{ lang: Lang; t: LegacyDict }>({ lang: "en", t: legacyDict("en") });
+export const useI18n = () => useContext(I18n);
+
+// #region pet-settings-misc
 export const PET_SIZE = { min: 48, max: 384, step: 8 };
 
 async function petWindow() {
@@ -153,6 +262,9 @@ export async function resizePet(px: number) {
   await w.setSize(new LogicalSize(px, px));
   await w.setPosition(new PhysicalPosition(pos.x + Math.round((size.width - next) / 2), pos.y + size.height - next));
 }
+// #endregion
+
+// ---- updater ----
 
 export type UpdateState =
   | { status: "idle" | "checking" | "none" | "error" }
@@ -199,3 +311,4 @@ export function useUpdater() {
   }, []);
   return { state, checkNow, install };
 }
+export type Updater = ReturnType<typeof useUpdater>;

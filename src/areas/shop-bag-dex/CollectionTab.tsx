@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { DexEntry, OwnedSpecies, Rarity, Settings, nameOf, ownedSpecies, sprite, useI18n, Companion } from "./shared";
-import { natureName } from "./i18n";
+// Collection tab (Pokédex + Catch log). Owner: shop-bag-dex area.
+import { DexEntry, OwnedSpecies, Rarity, Settings, TabProps, nameOf, ownedSpecies, sprite, useI18n, Companion } from "../../shared";
+import { natureName } from "../../i18n";
 
 const PAGE_SIZE = 16; // 4 × 4, like the original
 const RARITIES: Rarity[] = ["common", "uncommon", "rare", "legendary"];
@@ -220,7 +221,11 @@ function CatchLog({ dex }: { dex: DexEntry[] }) {
   );
 }
 
-export default function Dex(props: { c: Companion; settings: Settings; saveSettings: (s: Settings) => void }) {
+export default function CollectionTab({ companion, settings, save }: TabProps) {
+  return companion && <Dex c={companion} settings={settings} saveSettings={save} />;
+}
+
+function Dex(props: { c: Companion; settings: Settings; saveSettings: (s: Settings) => void }) {
   const { t } = useI18n();
   const [tab, setTab] = useState<"dex" | "log">("dex");
   const empty = props.c.dex.length === 0 && !props.c.active;

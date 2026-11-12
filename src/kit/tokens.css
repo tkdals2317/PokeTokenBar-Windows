@@ -1,0 +1,103 @@
+/* Design tokens (ui-shell.md §5.1-5.2). Owner: foundation. Areas use the variables, never raw hex. */
+:root {
+  color-scheme: light dark;
+  --popover-bg: #ececec;
+  --settings-bg: #ececec;
+  --card-bg: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.06);
+  --separator: rgba(0, 0, 0, 0.1);
+  --text: rgba(0, 0, 0, 0.85);
+  --text-2: rgba(0, 0, 0, 0.5);
+  --text-3: rgba(0, 0, 0, 0.26);
+  --accent: #007aff;
+  --seg-track: #e3e3e3;
+  --seg-selected: #ffffff;
+  --seg-selected-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.15);
+  --seg-divider: #c8c8c8;
+  --fill-8: rgba(0, 0, 0, 0.08);
+  --chip: rgba(0, 0, 0, 0.04);
+  --chip-selected-bg: rgba(0, 122, 255, 0.18);
+  --icon: rgba(0, 0, 0, 0.5);
+  --track: rgba(0, 0, 0, 0.1);
+  --banner-update-bg: rgba(0, 122, 255, 0.12);
+  --banner-warn-bg: rgba(255, 149, 0, 0.12);
+  --gray: #8e8e93;
+  /* System colours: PaceTier, rarity tints, warnings. */
+  --blue: #007aff;
+  --teal: #30b0c7;
+  --green: #28cd41;
+  --yellow: #ffcc00;
+  --orange: #ff9500;
+  --red: #ff3b30;
+  --pace-marker: rgba(0, 0, 0, 0.47); /* primary × 0.55 */
+
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --fs-big: 28px; /* today's total, bold */
+  --fs-headline: 13px; /* semibold */
+  --fs-body: 13px;
+  --fs-callout: 12px;
+  --fs-caption: 10px; /* caption and caption2 (macOS 10pt); see ui-shell.md §8 Q2 */
+  --fs-badge: 8px;
+  --radius-card: 8px;
+  --pad: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --popover-bg: #2c2c2c;
+    --settings-bg: #1e1e1e;
+    --card-bg: #1e1e1e;
+    --card-border: #343434;
+    --separator: #414141;
+    --text: rgba(255, 255, 255, 0.85);
+    --text-2: rgba(255, 255, 255, 0.55);
+    --text-3: rgba(255, 255, 255, 0.25);
+    --accent: #0a84ff;
+    --seg-track: #3c3c3c;
+    --seg-selected: #555555;
+    --seg-selected-shadow: none;
+    --seg-divider: #4f4f4f;
+    --fill-8: rgba(255, 255, 255, 0.08);
+    --chip: #353535;
+    --chip-selected-bg: #243a52;
+    --icon: #989898;
+    --track: #434343;
+    --banner-update-bg: rgba(10, 132, 255, 0.12);
+    --banner-warn-bg: rgba(255, 159, 10, 0.12);
+    --blue: #0a84ff;
+    --teal: #40c8e0;
+    --green: #32d74b;
+    --yellow: #ffd60a;
+    --orange: #ff9f0a;
+    --red: #ff453a;
+    --pace-marker: rgba(255, 255, 255, 0.47);
+  }
+}
+
+html,
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  color: var(--text);
+  background: var(--popover-bg);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.caption {
+  font-size: var(--fs-caption);
+}
+.secondary {
+  color: var(--text-2);
+}
+.tertiary {
+  color: var(--text-3);
+}
+hr.divider {
+  border: none;
+  border-top: 1px solid var(--separator);
+  margin: 0;
+}
